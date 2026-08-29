@@ -144,45 +144,89 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
     return fig
 
 
+def _signals_table_rows(result, labels):
+    return [
+        {
+            "Point": labels[idx],
+            "Chart": "X" if chart == "x" else "mR",
+            "Value": result.values[idx]
+            if chart == "x"
+            else result.moving_ranges[idx],
+            "Rule": rule,
+        }
+        for idx, rule, chart in result.violations
+    ]
+
+
+def _summary_caption(result, n):
+    x_pts = len({idx for idx, _, chart in result.violations if chart == "x"})
+    mr_pts = len({idx for idx, _, chart in result.violations if chart == "mr"})
+    return (
+        f"n = {n}  |  X̄ = {result.x_center:.3f}  |  "
+        f"mR̄ = {result.mr_center:.3f}  |  UNPL = {result.unpl:.3f}  |  "
+        f"LNPL = {result.lnpl:.3f}  |  URL = {result.mr_upper:.3f}  |  "
+        f"flagged points — X: {x_pts}, mR: {mr_pts}"
+    )
+
+
+def _sidebar_inputs():
+    """Render the sidebar controls.
+
+    Returns ``(df, time_col, value_col, ruleset)`` once a usable file is
+    uploaded, or ``None`` when nothing has been uploaded yet. Calls
+    ``st.stop()`` itself for an unreadable or malformed file.
+    """
+    with st.sidebar:
+        st.header("Data & options")
+        uploaded = st.file_uploader(
+            "Upload a CSV or Excel file", type=["csv", "xlsx"]
+        )
+        if uploaded is None:
+            st.caption("`sample_data.csv` in the repo is a good first try.")
+            return None
+
+        try:
+            df = _read_upload(uploaded)
+        except Exception as exc:  # noqa: BLE001 - surface any parser message
+            st.error(f"Could not read the file: {exc}")
+            st.stop()
+
+        if df.empty or len(df.columns) < 2:
+            st.error("The file needs at least two columns and one row of data.")
+            st.stop()
+
+        columns = list(df.columns)
+        time_col = st.selectbox("Time / label column", columns, index=0)
+        value_col = st.selectbox(
+            "Value column", columns, index=1 if len(columns) > 1 else 0
+        )
+        ruleset = st.radio(
+            "Detection ruleset",
+            options=list(RULESETS),
+            format_func=lambda r: (
+                f"Ruleset {r} — rules {', '.join(map(str, RULESETS[r]))}"
+            ),
+        )
+    return df, time_col, value_col, ruleset
+
+
 def main():
-    st.set_page_config(page_title="XmR Chart Analyzer", layout="wide")
+    st.set_page_config(
+        page_title="XmR Chart Analyzer",
+        layout="wide",
+        initial_sidebar_state="expanded",
+    )
     st.title("XmR Chart Analyzer")
 
-    uploaded = st.file_uploader("Upload a CSV or Excel file",
-                                type=["csv", "xlsx"])
-    if uploaded is None:
+    inputs = _sidebar_inputs()
+    if inputs is None:
         st.info(
-            "Upload a CSV or Excel file to begin. The repo's `sample_data.csv` "
-            "is a good first try (time column `week`, value column "
-            "`measurement`)."
+            "Upload a CSV or Excel file from the sidebar to begin. The repo's "
+            "`sample_data.csv` is a good first try (time column `week`, value "
+            "column `measurement`)."
         )
         st.stop()
-
-    try:
-        df = _read_upload(uploaded)
-    except Exception as exc:  # noqa: BLE001 - surface any parser message
-        st.error(f"Could not read the file: {exc}")
-        st.stop()
-
-    if df.empty or len(df.columns) < 2:
-        st.error("The file needs at least two columns and one row of data.")
-        st.stop()
-
-    st.subheader("Preview")
-    st.dataframe(df.head(50), use_container_width=True)
-
-    columns = list(df.columns)
-    c1, c2 = st.columns(2)
-    time_col = c1.selectbox("Time / label column", columns, index=0)
-    value_col = c2.selectbox(
-        "Value column", columns, index=1 if len(columns) > 1 else 0
-    )
-    ruleset = st.radio(
-        "Detection ruleset",
-        options=list(RULESETS),
-        format_func=lambda r: f"Ruleset {r}  (rules {', '.join(map(str, RULESETS[r]))})",
-        horizontal=True,
-    )
+    df, time_col, value_col, ruleset = inputs
 
     if time_col == value_col:
         st.error("Pick two different columns for the time and value.")
@@ -190,7 +234,9 @@ def main():
 
     labels, values, dropped = clean_series(df, time_col, value_col)
     if dropped:
-        st.warning(f"Skipped {dropped} row(s) with missing or non-numeric values.")
+        st.warning(
+            f"Skipped {dropped} row(s) with missing or non-numeric values."
+        )
 
     if len(values) < MIN_POINTS:
         st.error(
@@ -223,36 +269,29 @@ def main():
     for idx, rule, chart in result.violations:
         (x_flags if chart == "x" else mr_flags)[idx].add(rule)
 
-    st.plotly_chart(
-        _xmr_figure(labels, result, x_flags, mr_flags),
-        use_container_width=True,
-    )
+    charts_tab, data_tab = st.tabs(["📈 Charts", "🗂 Data"])
 
-    st.subheader("Signals")
-    if result.violations:
-        rows = [
-            {
-                "Point": labels[idx],
-                "Chart": "X" if chart == "x" else "mR",
-                "Value": result.values[idx]
-                if chart == "x"
-                else result.moving_ranges[idx],
-                "Rule": rule,
-            }
-            for idx, rule, chart in result.violations
-        ]
-        st.dataframe(pd.DataFrame(rows), use_container_width=True)
-    else:
-        st.success("No signals detected — the process looks predictable.")
+    with charts_tab:
+        st.plotly_chart(
+            _xmr_figure(labels, result, x_flags, mr_flags),
+            use_container_width=True,
+        )
+        st.subheader("Signals")
+        if result.violations:
+            st.dataframe(
+                pd.DataFrame(_signals_table_rows(result, labels)),
+                use_container_width=True,
+            )
+        else:
+            st.success("No signals detected — the process looks predictable.")
+        st.caption(_summary_caption(result, len(values)))
 
-    x_pts = len({idx for idx, _, chart in result.violations if chart == "x"})
-    mr_pts = len({idx for idx, _, chart in result.violations if chart == "mr"})
-    st.caption(
-        f"n = {len(values)}  |  X̄ = {result.x_center:.3f}  |  "
-        f"mR̄ = {result.mr_center:.3f}  |  UNPL = {result.unpl:.3f}  |  "
-        f"LNPL = {result.lnpl:.3f}  |  URL = {result.mr_upper:.3f}  |  "
-        f"flagged points — X: {x_pts}, mR: {mr_pts}"
-    )
+    with data_tab:
+        note = f"{len(df)} rows uploaded · {len(values)} used"
+        if dropped:
+            note += f" · {dropped} skipped (missing or non-numeric)"
+        st.caption(note)
+        st.dataframe(df, use_container_width=True)
 
 
 if __name__ == "__main__":

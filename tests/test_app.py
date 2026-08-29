@@ -107,6 +107,30 @@ def test_xmr_figure_trend_and_line_colors_are_a_fixed_gray_ramp():
     assert "0.28" in app.ZONE_COLOR
 
 
+def test_signals_table_rows_map_violations_to_labels():
+    labels, result = _sample_result()
+    rows = app._signals_table_rows(result, labels)
+
+    assert len(rows) == len(result.violations)
+    for row, (idx, rule, chart) in zip(rows, result.violations):
+        assert row["Point"] == labels[idx]
+        assert row["Chart"] == ("X" if chart == "x" else "mR")
+        assert row["Rule"] == rule
+        expected = (
+            result.values[idx] if chart == "x" else result.moving_ranges[idx]
+        )
+        assert row["Value"] == expected
+
+
+def test_summary_caption_reports_limits_and_split_counts():
+    labels, result = _sample_result()
+    caption = app._summary_caption(result, len(result.values))
+
+    assert f"n = {len(result.values)}" in caption
+    assert f"UNPL = {result.unpl:.3f}" in caption
+    assert "flagged points — X:" in caption
+
+
 def test_xmr_figure_secondary_zone_line_count_matches_ruleset():
     labels, r1 = _sample_result(ruleset=1)
     labels, r2 = _sample_result(ruleset=2)
