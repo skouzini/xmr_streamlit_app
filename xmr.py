@@ -12,6 +12,8 @@ SOFT_LIMIT_MIN_MR = 17
 X_LIMIT_SIGMA_MULT = 2.660  # 3-sigma multiplier on mR-bar for the X chart
 MR_UPPER_MULT = 3.268       # upper-range-limit multiplier on mR-bar
 RULESETS = {1: (1, 2, 3), 2: (1, 2, 4, 5)}
+# rule_number -> (k, m, k_sigma) for the "k of m beyond k-sigma" rules
+_KOFM = {3: (3, 4, 1.5), 4: (2, 3, 2.0), 5: (4, 5, 1.0)}
 
 
 @dataclass
@@ -102,7 +104,28 @@ def analyze(values, ruleset: int = 1, baseline=None) -> XmRResult:
     lnpl = x_center - X_LIMIT_SIGMA_MULT * mr_center
     mr_upper = MR_UPPER_MULT * mr_center
 
-    violations: list[tuple[int, int, str]] = []  # rules wired in Task 4
+    rules = RULESETS[ruleset]
+    violations: list[tuple[int, int, str]] = []
+
+    if 1 in rules:
+        for i in rule_1(values, lnpl, unpl):
+            violations.append((i, 1, "x"))
+    if 2 in rules:
+        for i in rule_2(values, x_center):
+            violations.append((i, 2, "x"))
+    for rule_num, (k, m, k_sigma) in _KOFM.items():
+        if rule_num not in rules:
+            continue
+        half = _sigma_half_width(k_sigma, mr_center)
+        hits = rule_k_of_m(values, x_center + half, x_center - half, k, m)
+        for i in hits:
+            violations.append((i, rule_num, "x"))
+
+    for i in range(1, n):
+        if moving_ranges[i] is not None and moving_ranges[i] > mr_upper:
+            violations.append((i, 1, "mr"))
+
+    violations.sort()
 
     return XmRResult(
         values=values,
