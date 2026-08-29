@@ -52,8 +52,12 @@ object. `app.py` does only I/O and rendering — it hands ordered values to
 
 - `git init` in the project root
 - remote `origin` = `https://github.com/skouzini/xmr_streamlit_app.git`
-- Push to `origin` after each feature lands.
-- Pull requests only with explicit permission.
+- Each feature is developed on its own feature branch off `main`.
+- Commits and pushes to the feature branch happen freely as work progresses.
+- When a feature is complete and verified, a pull request is opened to merge
+  the feature branch into `main` — with explicit permission before opening
+  each PR.
+- `main` receives changes only through merged pull requests.
 
 ## XmR calculations (`xmr.py`)
 
