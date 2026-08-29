@@ -8,6 +8,24 @@ def test_app_exposes_main():
     assert callable(app.main)
 
 
+def test_bundled_sample_matches_the_csv_file():
+    from pathlib import Path
+
+    on_disk = (Path(app.__file__).parent / "sample_data.csv").read_text()
+    assert app.SAMPLE_CSV == on_disk
+
+
+def test_sample_df_parses_and_charts_cleanly():
+    df = app._sample_df()
+    assert list(df.columns) == ["week", "measurement"]
+    assert len(df) == 24
+
+    labels, values, dropped = app.clean_series(df, "week", "measurement")
+    assert dropped == 0
+    result = analyze(values, ruleset=1)
+    assert result.violations  # the sample is built to trip at least one rule
+
+
 def test_data_tab_renders_a_preview_not_the_whole_table(monkeypatch):
     shown = []
     monkeypatch.setattr(app.st, "dataframe", lambda *a, **k: shown.append(a[0]))

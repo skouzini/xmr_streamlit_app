@@ -16,12 +16,14 @@ pip install -r requirements.txt
 streamlit run app.py
 ```
 
-1. Upload a CSV or `.xlsx` file.
+The app opens on a bundled sample dataset. To analyze your own:
+
+1. Upload a CSV or `.xlsx` file from the sidebar.
 2. Pick the time/label column and the value column.
 3. Choose a detection ruleset.
 
-Try `sample_data.csv` with time column `week` and value column
-`measurement`.
+`sample_data.csv` (the bundled sample) is also in the repo — time column
+`week`, value column `measurement`.
 
 ## What it computes
 

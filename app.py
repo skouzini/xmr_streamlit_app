@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from collections import defaultdict
 
 import pandas as pd
@@ -13,6 +14,39 @@ from xmr import MIN_POINTS, RULESETS, SOFT_LIMIT_MIN_MR, analyze
 
 RED = "#d62728"  # signal-point highlight
 PREVIEW_ROWS = 50  # rows shown in the Data tab preview
+
+# Bundled sample so the app has something to show before anything is uploaded.
+# Kept byte-identical to sample_data.csv (a test guards against drift).
+SAMPLE_CSV = """week,measurement
+2026-01-05,50
+2026-01-12,52
+2026-01-19,49
+2026-01-26,51
+2026-02-02,50
+2026-02-09,53
+2026-02-16,48
+2026-02-23,51
+2026-03-02,50
+2026-03-09,49
+2026-03-16,66
+2026-03-23,51
+2026-03-30,50
+2026-04-06,52
+2026-04-13,48
+2026-04-20,50
+2026-04-27,51
+2026-05-04,49
+2026-05-11,53
+2026-05-18,50
+2026-05-25,30
+2026-06-01,51
+2026-06-08,49
+2026-06-15,50
+"""
+
+
+def _sample_df():
+    return pd.read_csv(io.StringIO(SAMPLE_CSV))
 
 # One-line summary of each detection rule, for the ruleset tooltip.
 RULE_SUMMARIES = {
@@ -184,28 +218,34 @@ def _summary_caption(result, n):
 def _sidebar_inputs():
     """Render the sidebar controls.
 
-    Returns ``(df, time_col, value_col, ruleset)`` once a usable file is
-    uploaded, or ``None`` when nothing has been uploaded yet. Calls
-    ``st.stop()`` itself for an unreadable or malformed file.
+    Returns ``(df, time_col, value_col, ruleset, is_sample)``. Until a file is
+    uploaded, ``df`` is the bundled sample and ``is_sample`` is True. Calls
+    ``st.stop()`` itself for an unreadable or malformed uploaded file.
     """
     with st.sidebar:
         st.header("Data & options")
         uploaded = st.file_uploader(
             "Upload a CSV or Excel file", type=["csv", "xlsx"]
         )
-        if uploaded is None:
-            st.caption("`sample_data.csv` in the repo is a good first try.")
-            return None
 
-        try:
-            df = _read_upload(uploaded)
-        except Exception as exc:  # noqa: BLE001 - surface any parser message
-            st.error(f"Could not read the file: {exc}")
-            st.stop()
+        is_sample = uploaded is None
+        if is_sample:
+            df = _sample_df()
+            st.caption(
+                "Showing **sample data** — upload a file to analyze your own."
+            )
+        else:
+            try:
+                df = _read_upload(uploaded)
+            except Exception as exc:  # noqa: BLE001 - surface parser message
+                st.error(f"Could not read the file: {exc}")
+                st.stop()
 
-        if df.empty or len(df.columns) < 2:
-            st.error("The file needs at least two columns and one row of data.")
-            st.stop()
+            if df.empty or len(df.columns) < 2:
+                st.error(
+                    "The file needs at least two columns and one row of data."
+                )
+                st.stop()
 
         columns = list(df.columns)
         time_col = st.selectbox("Time / label column", columns, index=0)
@@ -220,7 +260,7 @@ def _sidebar_inputs():
             ),
             help=_ruleset_help(),
         )
-    return df, time_col, value_col, ruleset
+    return df, time_col, value_col, ruleset, is_sample
 
 
 def _ruleset_help():
@@ -240,15 +280,12 @@ def main():
     )
     st.title("XmR Chart Analyzer")
 
-    inputs = _sidebar_inputs()
-    if inputs is None:
+    df, time_col, value_col, ruleset, is_sample = _sidebar_inputs()
+    if is_sample:
         st.info(
-            "Upload a CSV or Excel file from the sidebar to begin. The repo's "
-            "`sample_data.csv` is a good first try (time column `week`, value "
-            "column `measurement`)."
+            "📊 Showing bundled **sample data**. Upload a CSV or Excel file "
+            "from the sidebar to analyze your own."
         )
-        st.stop()
-    df, time_col, value_col, ruleset = inputs
 
     charts_tab, data_tab = st.tabs(["📈 Charts", "🗂 Data"])
 
