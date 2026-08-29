@@ -55,7 +55,7 @@ openpyxl
 pytest
 ```
 
-- [ ] **Step 3: Write `.gitignore`**
+- [ ] **Step 3: Write `.gitignore`** (it may already exist from workspace setup; ensure it contains exactly this)
 
 ```
 __pycache__/
@@ -65,6 +65,7 @@ __pycache__/
 venv/
 .DS_Store
 .streamlit/secrets.toml
+.superpowers/
 ```
 
 - [ ] **Step 4: Write `sample_data.csv`**
