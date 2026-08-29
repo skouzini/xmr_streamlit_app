@@ -50,6 +50,9 @@ The mR chart uses rule 1 only.
 - Fewer than 4 data points: no chart.
 - Fewer than 17 moving ranges (~18 points): charts render, but the limits
   are flagged as soft / provisional.
+- A sustained shift in the process inflates the limits computed over all the
+  data (the moving ranges spanning the shift widen `mR-bar`), which is exactly
+  what the not-yet-implemented baseline locking will address.
 
 ## Tests
 

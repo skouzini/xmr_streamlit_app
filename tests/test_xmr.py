@@ -71,3 +71,15 @@ def test_baseline_changes_limits():
 def test_baseline_too_short_raises():
     with pytest.raises(ValueError):
         analyze(SERIES_A, baseline=(3, 4))
+
+
+def test_soft_limit_boundary_moving_range_counts():
+    r18 = analyze(list(range(18)))
+    assert len(r18.moving_ranges) == 18
+    non_none_18 = sum(1 for m in r18.moving_ranges if m is not None)
+    assert non_none_18 == 17 == SOFT_LIMIT_MIN_MR
+
+    r17 = analyze(list(range(17)))
+    non_none_17 = sum(1 for m in r17.moving_ranges if m is not None)
+    assert non_none_17 == 16
+    assert non_none_17 < SOFT_LIMIT_MIN_MR

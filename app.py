@@ -7,6 +7,7 @@ from collections import defaultdict
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from plotly.subplots import make_subplots
 
 from xmr import MIN_POINTS, RULESETS, SOFT_LIMIT_MIN_MR, analyze
 
@@ -17,13 +18,11 @@ GREEN = "#2ca02c"
 
 def clean_series(df, time_col, value_col):
     """Return (labels, values, dropped_count), keeping row order."""
-    work = df[[time_col, value_col]].copy()
-    work[value_col] = pd.to_numeric(work[value_col], errors="coerce")
-    n_before = len(work)
-    work = work.dropna(subset=[value_col])
-    dropped = n_before - len(work)
-    labels = work[time_col].astype(str).tolist()
-    values = [float(v) for v in work[value_col].tolist()]
+    numeric = pd.to_numeric(df[value_col], errors="coerce")
+    mask = numeric.notna()
+    labels = df.loc[mask, time_col].astype(str).tolist()
+    values = [float(v) for v in numeric[mask].tolist()]
+    dropped = int((~mask).sum())
     return labels, values, dropped
 
 
@@ -47,13 +46,26 @@ def _hover_text(n, flags_by_index):
     out = []
     for i in range(n):
         rules = sorted(flags_by_index.get(i, ()))
-        out.append(", ".join(f"Rule {r}" for r in rules) if rules else "")
+        if rules:
+            out.append("<br>" + ", ".join(f"Rule {r}" for r in rules))
+        else:
+            out.append("")
     return out
 
 
-def _x_chart(labels, result, x_flags):
+def _xmr_figure(labels, result, x_flags, mr_flags):
     n = len(result.values)
-    fig = go.Figure()
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.12,
+        subplot_titles=(
+            "X chart (individual values)",
+            "mR chart (moving ranges)",
+        ),
+    )
+
     fig.add_trace(
         go.Scatter(
             x=labels,
@@ -62,24 +74,19 @@ def _x_chart(labels, result, x_flags):
             line=dict(color=BLUE),
             marker=dict(color=_marker_colors(n, x_flags), size=8),
             text=_hover_text(n, x_flags),
-            hovertemplate="%{x}<br>Value: %{y}<br>%{text}<extra></extra>",
+            hovertemplate="%{x}<br>Value: %{y}%{text}<extra></extra>",
             name="Value",
-        )
+        ),
+        row=1,
+        col=1,
     )
     fig.add_hline(y=result.x_center, line_color=GREEN,
-                  annotation_text="X̄")
+                  annotation_text="X̄", row=1, col=1)
     fig.add_hline(y=result.unpl, line_color=RED, line_dash="dash",
-                  annotation_text="UNPL")
+                  annotation_text="UNPL", row=1, col=1)
     fig.add_hline(y=result.lnpl, line_color=RED, line_dash="dash",
-                  annotation_text="LNPL")
-    fig.update_layout(title="X chart (individual values)", height=380,
-                      showlegend=False, margin=dict(t=40, b=20))
-    return fig
+                  annotation_text="LNPL", row=1, col=1)
 
-
-def _mr_chart(labels, result, mr_flags):
-    n = len(result.values)
-    fig = go.Figure()
     fig.add_trace(
         go.Scatter(
             x=labels,
@@ -88,17 +95,19 @@ def _mr_chart(labels, result, mr_flags):
             line=dict(color=BLUE),
             marker=dict(color=_marker_colors(n, mr_flags), size=8),
             text=_hover_text(n, mr_flags),
-            hovertemplate="%{x}<br>Moving range: %{y}<br>%{text}<extra></extra>",
+            hovertemplate="%{x}<br>Moving range: %{y}%{text}<extra></extra>",
             name="Moving range",
             connectgaps=False,
-        )
+        ),
+        row=2,
+        col=1,
     )
     fig.add_hline(y=result.mr_center, line_color=GREEN,
-                  annotation_text="mR̄")
+                  annotation_text="mR̄", row=2, col=1)
     fig.add_hline(y=result.mr_upper, line_color=RED, line_dash="dash",
-                  annotation_text="URL")
-    fig.update_layout(title="mR chart (moving ranges)", height=300,
-                      showlegend=False, margin=dict(t=40, b=20))
+                  annotation_text="URL", row=2, col=1)
+
+    fig.update_layout(height=680, showlegend=False, margin=dict(t=40, b=20))
     return fig
 
 
@@ -142,6 +151,10 @@ def main():
         horizontal=True,
     )
 
+    if time_col == value_col:
+        st.error("Pick two different columns for the time and value.")
+        st.stop()
+
     labels, values, dropped = clean_series(df, time_col, value_col)
     if dropped:
         st.warning(f"Skipped {dropped} row(s) with missing or non-numeric values.")
@@ -177,8 +190,10 @@ def main():
     for idx, rule, chart in result.violations:
         (x_flags if chart == "x" else mr_flags)[idx].add(rule)
 
-    st.plotly_chart(_x_chart(labels, result, x_flags), use_container_width=True)
-    st.plotly_chart(_mr_chart(labels, result, mr_flags), use_container_width=True)
+    st.plotly_chart(
+        _xmr_figure(labels, result, x_flags, mr_flags),
+        use_container_width=True,
+    )
 
     st.subheader("Signals")
     if result.violations:
@@ -197,12 +212,13 @@ def main():
     else:
         st.success("No signals detected — the process looks predictable.")
 
-    signal_points = len({(idx, chart) for idx, _, chart in result.violations})
+    x_pts = len({idx for idx, _, chart in result.violations if chart == "x"})
+    mr_pts = len({idx for idx, _, chart in result.violations if chart == "mr"})
     st.caption(
         f"n = {len(values)}  |  X̄ = {result.x_center:.3f}  |  "
         f"mR̄ = {result.mr_center:.3f}  |  UNPL = {result.unpl:.3f}  |  "
         f"LNPL = {result.lnpl:.3f}  |  URL = {result.mr_upper:.3f}  |  "
-        f"flagged points: {signal_points}"
+        f"flagged points — X: {x_pts}, mR: {mr_pts}"
     )
 
 

@@ -1,5 +1,3 @@
-import pytest
-
 from xmr import analyze
 
 # 10-point stable baseline: alternating 10/11, mR-bar = 1, X-bar = 10.5.
