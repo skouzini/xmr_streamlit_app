@@ -8,6 +8,78 @@ def test_app_exposes_main():
     assert callable(app.main)
 
 
+def test_bundled_sample_matches_the_csv_file():
+    from pathlib import Path
+
+    on_disk = (Path(app.__file__).parent / "sample_data.csv").read_text()
+    assert app.SAMPLE_CSV == on_disk
+
+
+def test_sample_df_parses_and_charts_cleanly():
+    df = app._sample_df()
+    assert list(df.columns) == ["week", "measurement"]
+    assert len(df) == 24
+
+    labels, values, dropped = app.clean_series(df, "week", "measurement")
+    assert dropped == 0
+    result = analyze(values, ruleset=1)
+    assert result.violations  # the sample is built to trip at least one rule
+
+
+def test_data_tab_renders_a_preview_not_the_whole_table(monkeypatch):
+    shown = []
+    monkeypatch.setattr(app.st, "dataframe", lambda *a, **k: shown.append(a[0]))
+    captions = []
+    monkeypatch.setattr(app.st, "caption", lambda *a, **k: captions.append(a[0]))
+
+    df = pd.DataFrame({"t": range(200), "v": range(200)})
+    app._render_data_tab(df, "t", "v")
+
+    assert len(shown) == 1
+    assert len(shown[0]) == app.PREVIEW_ROWS
+    assert f"first {app.PREVIEW_ROWS} rows" in captions[0]
+
+
+def test_data_tab_renders_regardless_of_column_choice(monkeypatch):
+    shown = []
+    monkeypatch.setattr(app.st, "dataframe", lambda *a, **k: shown.append(a))
+    monkeypatch.setattr(app.st, "caption", lambda *a, **k: None)
+
+    df = pd.DataFrame({"v": [1, 2, 3, 4]})
+    app._render_data_tab(df, "v", "v")  # same column picked — still shows
+    assert len(shown) == 1
+
+
+def test_ruleset_help_summarizes_every_rule_in_each_ruleset():
+    from xmr import RULESETS
+
+    help_text = app._ruleset_help()
+    for rs, rules in RULESETS.items():
+        assert f"Ruleset {rs}" in help_text
+        for r in rules:
+            assert app.RULE_SUMMARIES[r] in help_text
+
+
+def test_charts_tab_draws_a_chart_only_when_the_data_is_usable(monkeypatch):
+    drawn = []
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: drawn.append(a))
+    for name in ("error", "warning", "success", "subheader", "caption",
+                 "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    good = pd.DataFrame(
+        {"t": list(range(12)),
+         "v": [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 20, 11]}
+    )
+    app._render_charts_tab(good, "t", "v", 1)
+    assert len(drawn) == 1
+
+    drawn.clear()
+    app._render_charts_tab(good, "t", "t", 1)          # same column
+    app._render_charts_tab(pd.DataFrame({"a": ["x"], "b": ["y"]}), "a", "b", 1)
+    assert drawn == []  # error paths return without drawing
+
+
 def test_clean_series_drops_non_numeric_and_missing_preserving_order():
     df = pd.DataFrame(
         {"t": ["a", "b", "c", "d", "e"], "v": [1, "oops", 3, None, 5]}
@@ -47,16 +119,20 @@ def _marker_traces(fig):
     return [t for t in fig.data if t.mode == "markers"]
 
 
-def test_xmr_figure_hovertemplates_carry_limit_values():
+def test_xmr_figure_hovertemplates_list_limits_one_per_line_high_to_low():
     labels, result = _sample_result()
     fig = app._xmr_figure(labels, result, {}, {})
-
     x_tmpl, mr_tmpl = (t.hovertemplate for t in _line_traces(fig))
-    assert f"{result.unpl:.2f}" in x_tmpl
-    assert f"{result.x_center:.2f}" in x_tmpl
-    assert f"{result.lnpl:.2f}" in x_tmpl
-    assert f"{result.mr_center:.2f}" in mr_tmpl
-    assert f"{result.mr_upper:.2f}" in mr_tmpl
+
+    assert f"<br>UNPL {result.unpl:.2f}" in x_tmpl
+    assert f"<br>X̄ {result.x_center:.2f}" in x_tmpl
+    assert f"<br>LNPL {result.lnpl:.2f}" in x_tmpl
+    # ordered highest value on top
+    assert x_tmpl.index("UNPL") < x_tmpl.index("X̄") < x_tmpl.index("LNPL")
+
+    assert f"<br>URL {result.mr_upper:.2f}" in mr_tmpl
+    assert f"<br>mR̄ {result.mr_center:.2f}" in mr_tmpl
+    assert mr_tmpl.index("URL") < mr_tmpl.index("mR̄")
 
 
 def test_xmr_figure_hlines_annotated_with_numeric_values_on_the_right():
@@ -105,6 +181,30 @@ def test_xmr_figure_trend_and_line_colors_are_a_fixed_gray_ramp():
     assert "0.7" in app.CENTER_COLOR
     assert "0.4" in app.LIMIT_COLOR
     assert "0.28" in app.ZONE_COLOR
+
+
+def test_signals_table_rows_map_violations_to_labels():
+    labels, result = _sample_result()
+    rows = app._signals_table_rows(result, labels)
+
+    assert len(rows) == len(result.violations)
+    for row, (idx, rule, chart) in zip(rows, result.violations):
+        assert row["Point"] == labels[idx]
+        assert row["Chart"] == ("X" if chart == "x" else "mR")
+        assert row["Rule"] == rule
+        expected = (
+            result.values[idx] if chart == "x" else result.moving_ranges[idx]
+        )
+        assert row["Value"] == expected
+
+
+def test_summary_caption_reports_limits_and_split_counts():
+    labels, result = _sample_result()
+    caption = app._summary_caption(result, len(result.values))
+
+    assert f"n = {len(result.values)}" in caption
+    assert f"UNPL = {result.unpl:.3f}" in caption
+    assert "flagged points — X:" in caption
 
 
 def test_xmr_figure_secondary_zone_line_count_matches_ruleset():
