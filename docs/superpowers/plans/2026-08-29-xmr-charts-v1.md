@@ -158,6 +158,7 @@ git commit -m "chore: project scaffold for XmR charts"
   - Module constants: `MIN_POINTS = 4`, `SOFT_LIMIT_MIN_MR = 17`, `X_LIMIT_SIGMA_MULT = 2.660`, `MR_UPPER_MULT = 3.268`, `RULESETS = {1: (1, 2, 3), 2: (1, 2, 4, 5)}`
   - `@dataclass XmRResult` with fields, in order: `values: list[float]`, `moving_ranges: list[float | None]` (length n, index 0 is `None`), `x_center: float`, `unpl: float`, `lnpl: float`, `mr_center: float`, `mr_upper: float`, `violations: list[tuple[int, int, str]]`
   - `analyze(values, ruleset=1, baseline=None) -> XmRResult` — this task returns a result whose `violations` is always `[]` (rules are added in Task 4). `baseline` is `None` or a `(start, end)` half-open index pair over `values`.
+  - `_sigma_half_width(k_sigma, mr_center) -> float` — private helper `k_sigma / 3 * X_LIMIT_SIGMA_MULT * mr_center`. Not used within this task; Task 4 consumes it. It is a deliberate forward-looking helper, not dead code.
 
 - [ ] **Step 1: Write the failing test**
 
