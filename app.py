@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import warnings
 from collections import defaultdict
 from typing import NamedTuple
 
@@ -19,9 +20,17 @@ class Inputs(NamedTuple):
     time_col: str
     value_col: str
     ruleset: int
-    x_center: str   # "mean" | "median"
-    mr_center: str  # "mean" | "median"
+    x_center: str     # "mean" | "median"
+    mr_center: str    # "mean" | "median"
+    granularity: str  # "raw" | "day" | "week" | "month" | "quarter" | "year"
+    aggfunc: str      # "sum" | "mean" | ... (ignored when granularity == "raw")
     is_sample: bool
+
+
+_GRANULARITIES = ("raw", "day", "week", "month", "quarter", "year")
+_PERIOD_CODE = {"day": "D", "week": "W", "month": "M", "quarter": "Q",
+                "year": "Y"}
+_AGGFUNCS = ("sum", "mean", "median", "min", "max", "count", "first", "last")
 
 
 # Centerline symbol for hover text and the summary caption.
@@ -92,6 +101,47 @@ def clean_series(df, time_col, value_col):
     labels = df.loc[mask, time_col].astype(str).tolist()
     values = [float(v) for v in numeric[mask].tolist()]
     dropped = int((~mask).sum())
+    return labels, values, dropped
+
+
+def _period_label(period, granularity):
+    if granularity == "quarter":
+        return f"{period.year}-Q{period.quarter}"
+    if granularity == "year":
+        return str(period.year)
+    if granularity == "month":
+        return period.strftime("%Y-%m")
+    if granularity == "week":
+        return period.start_time.strftime("%Y-%m-%d")
+    return period.strftime("%Y-%m-%d")
+
+
+def aggregate(df, time_col, value_col, granularity, aggfunc):
+    """Resample df to a calendar granularity.
+
+    Returns ``(labels, values, dropped)`` — the same shape as ``clean_series``.
+    Rows whose time doesn't parse as a date, or whose value isn't numeric, are
+    dropped and counted. Raises ``ValueError`` when fewer than two rows have a
+    usable date (the time column isn't dates).
+    """
+    with warnings.catch_warnings():
+        # non-date strings coerce to NaT and are handled below; pandas' "could
+        # not infer format" notice is expected noise on that path.
+        warnings.simplefilter("ignore", UserWarning)
+        dates = pd.to_datetime(df[time_col], errors="coerce")
+    nums = pd.to_numeric(df[value_col], errors="coerce")
+    mask = dates.notna() & nums.notna()
+    dropped = int((~mask).sum())
+    if int(mask.sum()) < 2:
+        raise ValueError(f"Time column {time_col!r} doesn't look like dates.")
+
+    sub = pd.DataFrame(
+        {"period": dates[mask].dt.to_period(_PERIOD_CODE[granularity]),
+         "value": nums[mask].to_numpy()}
+    )
+    grouped = sub.groupby("period", sort=True)["value"].agg(aggfunc)
+    labels = [_period_label(p, granularity) for p in grouped.index]
+    values = [float(v) for v in grouped.to_numpy()]
     return labels, values, dropped
 
 
@@ -198,6 +248,9 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
     _labeled_hline(fig, 2, result.mr_center, CENTER_COLOR, "solid", "top right")
     _labeled_hline(fig, 2, result.mr_upper, LIMIT_COLOR, "dash", "top right")
 
+    # XmR is a sequence chart: evenly spaced points, labels shown verbatim
+    # (never re-interpreted as a date axis).
+    fig.update_xaxes(type="category")
     # x-axis tick labels on the X chart (row 1), not the mR chart (row 2)
     fig.update_xaxes(showticklabels=True, row=1, col=1)
     fig.update_xaxes(showticklabels=False, row=2, col=1)
@@ -273,6 +326,24 @@ def _sidebar_inputs():
         value_col = st.selectbox(
             "Value column", columns, index=1 if len(columns) > 1 else 0
         )
+        granularity = st.selectbox(
+            "Aggregate by",
+            options=_GRANULARITIES,
+            format_func=lambda g: (
+                "Raw (no aggregation)" if g == "raw" else g.capitalize()
+            ),
+            help="Bucket the data by calendar period. Needs a date time column.",
+        )
+        aggfunc = "mean"
+        if granularity != "raw":
+            aggfunc = st.selectbox(
+                "Aggregation",
+                options=_AGGFUNCS,
+                index=_AGGFUNCS.index("mean"),
+                format_func=str.capitalize,
+                help="Sum for cumulative measures like a budget; "
+                     "mean for readings.",
+            )
         ruleset = st.radio(
             "Detection ruleset",
             options=list(RULESETS),
@@ -299,7 +370,7 @@ def _sidebar_inputs():
             horizontal=True,
         )
     return Inputs(df, time_col, value_col, ruleset, x_center, mr_center,
-                  is_sample)
+                  granularity, aggfunc, is_sample)
 
 
 def _ruleset_help():
@@ -358,16 +429,36 @@ def _render_charts_tab(inp):
         )
         return
 
-    labels, values, dropped = clean_series(df, time_col, value_col)
+    agg_note = None
+    if inp.granularity == "raw":
+        labels, values, dropped = clean_series(df, time_col, value_col)
+    else:
+        try:
+            labels, values, dropped = aggregate(
+                df, time_col, value_col, inp.granularity, inp.aggfunc
+            )
+            agg_note = (
+                f"{len(df)} rows → {len(values)} {inp.granularity} "
+                f"point(s) ({inp.aggfunc})"
+            )
+        except ValueError as exc:
+            st.warning(f"{exc} Showing the raw data instead.")
+            labels, values, dropped = clean_series(df, time_col, value_col)
+
     if dropped:
         st.warning(
             f"Skipped {dropped} row(s) with missing or non-numeric values."
         )
+    if agg_note:
+        st.caption(agg_note)
 
     if len(values) < MIN_POINTS:
+        detail = f"got {len(values)}"
+        if inp.granularity != "raw":
+            detail += f" after aggregating by {inp.granularity}"
         st.error(
             f"XmR charts need at least {MIN_POINTS} data points; "
-            f"got {len(values)} usable in `{value_col}` — check the **Data** tab."
+            f"{detail} — check the **Data** tab."
         )
         return
 

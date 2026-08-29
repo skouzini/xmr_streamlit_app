@@ -1,13 +1,15 @@
 import pandas as pd
+import pytest
 
 import app
 from xmr import analyze
 
 
 def _inputs(df, time_col="t", value_col="v", ruleset=1,
-            x_center="mean", mr_center="mean", is_sample=False):
-    return app.Inputs(df, time_col, value_col, ruleset,
-                      x_center, mr_center, is_sample)
+            x_center="mean", mr_center="mean", granularity="raw",
+            aggfunc="mean", is_sample=False):
+    return app.Inputs(df, time_col, value_col, ruleset, x_center, mr_center,
+                      granularity, aggfunc, is_sample)
 
 
 def test_app_exposes_main():
@@ -54,6 +56,78 @@ def test_data_tab_renders_regardless_of_column_choice(monkeypatch):
     df = pd.DataFrame({"v": [1, 2, 3, 4]})
     app._render_data_tab(_inputs(df, "v", "v"))  # same column — still shows
     assert len(shown) == 1
+
+
+def test_aggregate_week_sum_labels_by_week_start():
+    df = pd.DataFrame(
+        {"d": ["2026-01-05", "2026-01-07", "2026-01-12", "2026-01-14",
+               "2026-01-19"],
+         "v": [1, 2, 3, 4, 5]}
+    )
+    labels, values, dropped = app.aggregate(df, "d", "v", "week", "sum")
+    assert dropped == 0
+    assert labels == ["2026-01-05", "2026-01-12", "2026-01-19"]
+    assert values == [3.0, 7.0, 5.0]
+
+
+def test_aggregate_month_quarter_year():
+    df = pd.DataFrame(
+        {"d": ["2026-01-10", "2026-01-20", "2026-02-15", "2026-04-01",
+               "2027-01-01"],
+         "v": [10, 20, 30, 40, 50]}
+    )
+    l, v, _ = app.aggregate(df, "d", "v", "month", "mean")
+    assert l == ["2026-01", "2026-02", "2026-04", "2027-01"]
+    assert v == [15.0, 30.0, 40.0, 50.0]
+
+    l, v, _ = app.aggregate(df, "d", "v", "quarter", "sum")
+    assert l == ["2026-Q1", "2026-Q2", "2027-Q1"]
+    assert v == [60.0, 40.0, 50.0]
+
+    l, v, _ = app.aggregate(df, "d", "v", "year", "sum")
+    assert l == ["2026", "2027"]
+    assert v == [100.0, 50.0]
+
+
+def test_aggregate_count_ignores_value_magnitude():
+    df = pd.DataFrame(
+        {"d": ["2026-01-05", "2026-01-06", "2026-01-12"], "v": [99, 1, 7]}
+    )
+    _, values, _ = app.aggregate(df, "d", "v", "week", "count")
+    assert values == [2.0, 1.0]
+
+
+def test_aggregate_drops_unparseable_date_and_value_rows():
+    df = pd.DataFrame(
+        {"d": ["2026-01-05", "not-a-date", "2026-01-12", "2026-01-19"],
+         "v": [1, 2, "x", 4]}
+    )
+    _, values, dropped = app.aggregate(df, "d", "v", "week", "sum")
+    assert dropped == 2
+    assert values == [1.0, 4.0]
+
+
+def test_aggregate_raises_when_column_is_not_dates():
+    df = pd.DataFrame({"d": ["a", "b", "c", "d"], "v": [1, 2, 3, 4]})
+    with pytest.raises(ValueError):
+        app.aggregate(df, "d", "v", "week", "sum")
+
+
+def test_charts_tab_falls_back_to_raw_when_time_is_not_dates(monkeypatch):
+    drawn = []
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: drawn.append(a))
+    for name in ("error", "warning", "success", "subheader", "caption",
+                 "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    df = pd.DataFrame(
+        {"t": ["a", "b", "c", "d", "e", "f"],
+         "v": [10, 11, 10, 11, 10, 20]}
+    )
+    app._render_charts_tab(
+        _inputs(df, "t", "v", granularity="week", aggfunc="sum")
+    )
+    assert len(drawn) == 1  # fell back to the raw series
 
 
 def test_ruleset_help_summarizes_every_rule_in_each_ruleset():
@@ -249,6 +323,14 @@ def test_xmr_figure_x_axis_on_x_chart_only():
 
     assert fig.layout.xaxis.showticklabels is True
     assert fig.layout.xaxis2.showticklabels is False
+
+
+def test_xmr_figure_uses_a_categorical_x_axis():
+    # XmR is a sequence chart: labels like "2026-Q1" must not be reinterpreted
+    labels, result = _sample_result()
+    fig = app._xmr_figure(labels, result, {}, {})
+    assert fig.layout.xaxis.type == "category"
+    assert fig.layout.xaxis2.type == "category"
 
 
 def test_xmr_figure_titles_are_y_axis_titles():
