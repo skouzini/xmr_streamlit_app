@@ -73,6 +73,28 @@ def test_baseline_too_short_raises():
         analyze(SERIES_A, baseline=(3, 4))
 
 
+def test_x_zone_bounds_ruleset_1_is_the_one_and_a_half_sigma_pair():
+    r = analyze(SERIES_A, ruleset=1)
+    half = 1.5 / 3 * 2.660 * (15 / 7)
+    assert r.x_zone_bounds == pytest.approx(
+        [11.625 - half, 11.625 + half]
+    )
+
+
+def test_x_zone_bounds_ruleset_2_is_the_one_and_two_sigma_pairs():
+    r = analyze(SERIES_A, ruleset=2)
+    one = 1.0 / 3 * 2.660 * (15 / 7)
+    two = 2.0 / 3 * 2.660 * (15 / 7)
+    assert r.x_zone_bounds == pytest.approx(
+        [11.625 - two, 11.625 - one, 11.625 + one, 11.625 + two]
+    )
+
+
+def test_x_zone_bounds_collapse_on_degenerate_series():
+    r = analyze([5, 5, 5, 5, 5], ruleset=2)
+    assert r.x_zone_bounds == [5.0, 5.0, 5.0, 5.0]
+
+
 def test_soft_limit_boundary_moving_range_counts():
     r18 = analyze(list(range(18)))
     assert len(r18.moving_ranges) == 18

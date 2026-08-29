@@ -11,9 +11,16 @@ from plotly.subplots import make_subplots
 
 from xmr import MIN_POINTS, RULESETS, SOFT_LIMIT_MIN_MR, analyze
 
-BLUE = "#1f77b4"
-RED = "#d62728"
-GREEN = "#2ca02c"
+RED = "#d62728"  # signal-point highlight
+
+# One neutral-gray palette that reads on both light and dark backgrounds.
+# Same hue throughout; opacity is the contrast ramp — trend line loudest,
+# then centerline, then the 3-sigma limits, then the secondary zone lines.
+TREND_COLOR = "#808080"
+CENTER_COLOR = "rgba(128, 128, 128, 0.7)"
+LIMIT_COLOR = "rgba(128, 128, 128, 0.4)"
+ZONE_COLOR = "rgba(128, 128, 128, 0.28)"
+GRID_COLOR = "rgba(128, 128, 128, 0.15)"
 
 
 def clean_series(df, time_col, value_col):
@@ -38,10 +45,6 @@ def _read_upload(uploaded):
     return pd.read_excel(xls, sheet_name=sheet)
 
 
-def _marker_colors(n, flagged_indices):
-    return [RED if i in flagged_indices else BLUE for i in range(n)]
-
-
 def _hover_text(n, flags_by_index):
     out = []
     for i in range(n):
@@ -53,61 +56,91 @@ def _hover_text(n, flags_by_index):
     return out
 
 
+def _signal_points(labels, y_values, flags_by_index):
+    """(xs, ys) for the flagged indices only — the red dots."""
+    idx = sorted(i for i in flags_by_index if flags_by_index[i])
+    return [labels[i] for i in idx], [y_values[i] for i in idx]
+
+
+def _line_and_signals(fig, row, labels, y_values, flags, hovertemplate, n):
+    """Add the grey trend line plus a red markers-only trace for signals."""
+    fig.add_trace(
+        go.Scatter(
+            x=labels,
+            y=y_values,
+            mode="lines",
+            line=dict(color=TREND_COLOR, width=1.5),
+            text=_hover_text(n, flags),
+            hovertemplate=hovertemplate,
+            connectgaps=False,
+            showlegend=False,
+        ),
+        row=row,
+        col=1,
+    )
+    sig_x, sig_y = _signal_points(labels, y_values, flags)
+    fig.add_trace(
+        go.Scatter(
+            x=sig_x,
+            y=sig_y,
+            mode="markers",
+            marker=dict(color=RED, size=9),
+            hoverinfo="skip",
+            showlegend=False,
+        ),
+        row=row,
+        col=1,
+    )
+
+
+def _labeled_hline(fig, row, y, color, dash, position):
+    fig.add_hline(
+        y=y, line_color=color, line_dash=dash, line_width=1,
+        annotation_text=f"{y:.2f}", annotation_position=position,
+        annotation_font_size=10, row=row, col=1,
+    )
+
+
 def _xmr_figure(labels, result, x_flags, mr_flags):
     n = len(result.values)
     fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        vertical_spacing=0.12,
-        subplot_titles=(
-            "X chart (individual values)",
-            "mR chart (moving ranges)",
-        ),
+        rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
     )
 
-    fig.add_trace(
-        go.Scatter(
-            x=labels,
-            y=result.values,
-            mode="lines+markers",
-            line=dict(color=BLUE),
-            marker=dict(color=_marker_colors(n, x_flags), size=8),
-            text=_hover_text(n, x_flags),
-            hovertemplate="%{x}<br>Value: %{y}%{text}<extra></extra>",
-            name="Value",
-        ),
-        row=1,
-        col=1,
+    x_hover = (
+        "%{x}<br>Value: %{y}%{text}"
+        f"<br>UNPL {result.unpl:.2f} · X̄ {result.x_center:.2f}"
+        f" · LNPL {result.lnpl:.2f}"
+        "<extra></extra>"
     )
-    fig.add_hline(y=result.x_center, line_color=GREEN,
-                  annotation_text="X̄", row=1, col=1)
-    fig.add_hline(y=result.unpl, line_color=RED, line_dash="dash",
-                  annotation_text="UNPL", row=1, col=1)
-    fig.add_hline(y=result.lnpl, line_color=RED, line_dash="dash",
-                  annotation_text="LNPL", row=1, col=1)
+    _line_and_signals(fig, 1, labels, result.values, x_flags, x_hover, n)
 
-    fig.add_trace(
-        go.Scatter(
-            x=labels,
-            y=result.moving_ranges,
-            mode="lines+markers",
-            line=dict(color=BLUE),
-            marker=dict(color=_marker_colors(n, mr_flags), size=8),
-            text=_hover_text(n, mr_flags),
-            hovertemplate="%{x}<br>Moving range: %{y}%{text}<extra></extra>",
-            name="Moving range",
-            connectgaps=False,
-        ),
-        row=2,
-        col=1,
+    # secondary detection zones for the active ruleset (very faint, unlabeled)
+    for y in result.x_zone_bounds:
+        fig.add_hline(y=y, line_color=ZONE_COLOR, line_dash="dot",
+                      line_width=1, row=1, col=1)
+    _labeled_hline(fig, 1, result.x_center, CENTER_COLOR, "solid", "top right")
+    _labeled_hline(fig, 1, result.unpl, LIMIT_COLOR, "dash", "top right")
+    _labeled_hline(fig, 1, result.lnpl, LIMIT_COLOR, "dash", "bottom right")
+
+    mr_hover = (
+        "%{x}<br>Moving range: %{y}%{text}"
+        f"<br>mR̄ {result.mr_center:.2f} · URL {result.mr_upper:.2f}"
+        "<extra></extra>"
     )
-    fig.add_hline(y=result.mr_center, line_color=GREEN,
-                  annotation_text="mR̄", row=2, col=1)
-    fig.add_hline(y=result.mr_upper, line_color=RED, line_dash="dash",
-                  annotation_text="URL", row=2, col=1)
+    _line_and_signals(fig, 2, labels, result.moving_ranges, mr_flags, mr_hover, n)
+    _labeled_hline(fig, 2, result.mr_center, CENTER_COLOR, "solid", "top right")
+    _labeled_hline(fig, 2, result.mr_upper, LIMIT_COLOR, "dash", "top right")
 
-    fig.update_layout(height=680, showlegend=False, margin=dict(t=40, b=20))
+    # x-axis tick labels on the X chart (row 1), not the mR chart (row 2)
+    fig.update_xaxes(showticklabels=True, row=1, col=1)
+    fig.update_xaxes(showticklabels=False, row=2, col=1)
+    # chart names as rotated (vertical) y-axis titles
+    fig.update_yaxes(title_text="X chart (individual values)", row=1, col=1)
+    fig.update_yaxes(title_text="mR chart (moving ranges)", row=2, col=1)
+
+    fig.update_layout(height=680, showlegend=False, margin=dict(t=20, b=20),
+                      hovermode="closest")
     return fig
 
 
