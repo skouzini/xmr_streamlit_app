@@ -31,6 +31,42 @@ def _sigma_half_width(k_sigma: float, mr_center: float) -> float:
     return k_sigma / 3.0 * X_LIMIT_SIGMA_MULT * mr_center
 
 
+def rule_1(values, lower: float, upper: float) -> set[int]:
+    """Points outside the control limits."""
+    return {i for i, v in enumerate(values) if v > upper or v < lower}
+
+
+def rule_2(values, center: float, run_length: int = 8) -> set[int]:
+    """Runs of `run_length`+ consecutive points on one side of the center."""
+    flagged: set[int] = set()
+    run: list[int] = []
+    last_sign = 0
+    for i, v in enumerate(values):
+        sign = 1 if v > center else (-1 if v < center else 0)
+        if sign != 0 and sign == last_sign:
+            run.append(i)
+        else:
+            run = [i] if sign != 0 else []
+        last_sign = sign
+        if len(run) >= run_length:
+            flagged.update(run)
+    return flagged
+
+
+def rule_k_of_m(values, upper: float, lower: float, k: int, m: int) -> set[int]:
+    """`k` of `m` consecutive points beyond a zone boundary, same side."""
+    flagged: set[int] = set()
+    for start in range(0, len(values) - m + 1):
+        window = range(start, start + m)
+        upper_hits = [i for i in window if values[i] > upper]
+        lower_hits = [i for i in window if values[i] < lower]
+        if len(upper_hits) >= k:
+            flagged.update(upper_hits)
+        if len(lower_hits) >= k:
+            flagged.update(lower_hits)
+    return flagged
+
+
 def analyze(values, ruleset: int = 1, baseline=None) -> XmRResult:
     values = [float(v) for v in values]
     n = len(values)
