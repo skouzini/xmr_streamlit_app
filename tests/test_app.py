@@ -53,7 +53,7 @@ def test_xmr_figure_hovertemplates_carry_limit_values():
     assert f"{result.mr_upper:.2f}" in mr_tmpl
 
 
-def test_xmr_figure_hlines_annotated_with_numeric_values():
+def test_xmr_figure_hlines_annotated_with_numeric_values_on_the_right():
     labels, result = _sample_result()
     fig = app._xmr_figure(labels, result, {}, {})
 
@@ -64,6 +64,34 @@ def test_xmr_figure_hlines_annotated_with_numeric_values():
     # the abbreviations are gone
     assert "UNPL" not in ann_texts
     assert "X̄" not in ann_texts
+    # numbers sit on the right
+    assert {a.xanchor for a in fig.layout.annotations} == {"right"}
+
+
+def test_xmr_figure_only_signal_points_are_highlighted():
+    labels, result = _sample_result()
+    x_flags = {10: {1}}
+    fig = app._xmr_figure(labels, result, x_flags, {})
+
+    marker_colors = list(fig.data[0].marker.color)
+    trend_color = fig.data[0].line.color
+    assert marker_colors[10] == app.RED
+    # every non-signal point blends into the trend line, no accent color
+    for i, c in enumerate(marker_colors):
+        if i != 10:
+            assert c == trend_color
+
+
+def test_xmr_figure_line_contrast_ramp():
+    labels, result = _sample_result()
+    fig = app._xmr_figure(labels, result, {}, {})
+
+    colors = app._line_colors()
+    # trend, centerline, limits are three distinct shades
+    assert len({colors["trend"], colors["center"], colors["limit"]}) == 3
+    shape_colors = {s.line.color for s in fig.layout.shapes}
+    assert colors["center"] in shape_colors
+    assert colors["limit"] in shape_colors
 
 
 def test_xmr_figure_x_axis_on_x_chart_only():

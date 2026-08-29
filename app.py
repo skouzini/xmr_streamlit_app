@@ -11,23 +11,40 @@ from plotly.subplots import make_subplots
 
 from xmr import MIN_POINTS, RULESETS, SOFT_LIMIT_MIN_MR, analyze
 
-BLUE = "#1f77b4"
-RED = "#d62728"
-CENTERLINE_GRAY = "#555555"
-LIMIT_GRAY = "#AAAAAA"
+RED = "#d62728"  # signal-point highlight
+
+# Line contrast ramp: the trend line is the most prominent, the limits the
+# quietest (nearest the background), the centerline sits between them.
+_LINE_COLORS = {
+    "dark": {"trend": "#FFFFFF", "center": "#A0A0A0", "limit": "#4A4A4A"},
+    "light": {"trend": "#111111", "center": "#707070", "limit": "#CFCFCF"},
+}
 
 
 def _theme_base():
-    """Streamlit's active theme ("light" or "dark"), defaulting to light."""
+    """Streamlit's *active* theme ("light" or "dark"), defaulting to light.
+
+    ``st.context.theme`` reflects the theme actually in effect, including a
+    choice the viewer made from the Settings menu; ``theme.base`` only knows
+    what config.toml declared.
+    """
     try:
-        return (st.get_option("theme.base") or "light").lower()
+        active = st.context.theme.type
+        if active in ("light", "dark"):
+            return active
     except Exception:
-        return "light"
+        pass
+    try:
+        base = st.get_option("theme.base")
+        if base:
+            return base.lower()
+    except Exception:
+        pass
+    return "light"
 
 
-def _trend_color():
-    """Data-line color: white on dark, near-black on light — max contrast."""
-    return "#FFFFFF" if _theme_base() == "dark" else "#111111"
+def _line_colors():
+    return _LINE_COLORS.get(_theme_base(), _LINE_COLORS["light"])
 
 
 def _plotly_template():
@@ -56,8 +73,9 @@ def _read_upload(uploaded):
     return pd.read_excel(xls, sheet_name=sheet)
 
 
-def _marker_colors(n, flagged_indices):
-    return [RED if i in flagged_indices else BLUE for i in range(n)]
+def _marker_colors(n, flagged_indices, plain_color):
+    """Signal points are red; every other point blends into the trend line."""
+    return [RED if i in flagged_indices else plain_color for i in range(n)]
 
 
 def _hover_text(n, flags_by_index):
@@ -73,7 +91,8 @@ def _hover_text(n, flags_by_index):
 
 def _xmr_figure(labels, result, x_flags, mr_flags):
     n = len(result.values)
-    trend = _trend_color()
+    colors = _line_colors()
+    trend = colors["trend"]
     fig = make_subplots(
         rows=2,
         cols=1,
@@ -93,7 +112,7 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
             y=result.values,
             mode="lines+markers",
             line=dict(color=trend),
-            marker=dict(color=_marker_colors(n, x_flags), size=8),
+            marker=dict(color=_marker_colors(n, x_flags, trend), size=8),
             text=_hover_text(n, x_flags),
             hovertemplate=x_hover,
             name="Value",
@@ -101,17 +120,17 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
         row=1,
         col=1,
     )
-    fig.add_hline(y=result.x_center, line_color=CENTERLINE_GRAY,
+    fig.add_hline(y=result.x_center, line_color=colors["center"],
                   annotation_text=f"{result.x_center:.2f}",
-                  annotation_position="top left", annotation_font_size=10,
+                  annotation_position="top right", annotation_font_size=10,
                   row=1, col=1)
-    fig.add_hline(y=result.unpl, line_color=LIMIT_GRAY, line_dash="dash",
+    fig.add_hline(y=result.unpl, line_color=colors["limit"], line_dash="dash",
                   annotation_text=f"{result.unpl:.2f}",
-                  annotation_position="top left", annotation_font_size=10,
+                  annotation_position="top right", annotation_font_size=10,
                   row=1, col=1)
-    fig.add_hline(y=result.lnpl, line_color=LIMIT_GRAY, line_dash="dash",
+    fig.add_hline(y=result.lnpl, line_color=colors["limit"], line_dash="dash",
                   annotation_text=f"{result.lnpl:.2f}",
-                  annotation_position="bottom left", annotation_font_size=10,
+                  annotation_position="bottom right", annotation_font_size=10,
                   row=1, col=1)
 
     mr_hover = (
@@ -125,7 +144,7 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
             y=result.moving_ranges,
             mode="lines+markers",
             line=dict(color=trend),
-            marker=dict(color=_marker_colors(n, mr_flags), size=8),
+            marker=dict(color=_marker_colors(n, mr_flags, trend), size=8),
             text=_hover_text(n, mr_flags),
             hovertemplate=mr_hover,
             name="Moving range",
@@ -134,13 +153,13 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
         row=2,
         col=1,
     )
-    fig.add_hline(y=result.mr_center, line_color=CENTERLINE_GRAY,
+    fig.add_hline(y=result.mr_center, line_color=colors["center"],
                   annotation_text=f"{result.mr_center:.2f}",
-                  annotation_position="top left", annotation_font_size=10,
+                  annotation_position="top right", annotation_font_size=10,
                   row=2, col=1)
-    fig.add_hline(y=result.mr_upper, line_color=LIMIT_GRAY, line_dash="dash",
+    fig.add_hline(y=result.mr_upper, line_color=colors["limit"], line_dash="dash",
                   annotation_text=f"{result.mr_upper:.2f}",
-                  annotation_position="top left", annotation_font_size=10,
+                  annotation_position="top right", annotation_font_size=10,
                   row=2, col=1)
 
     # x-axis tick labels on the X chart (row 1), not the mR chart (row 2)
