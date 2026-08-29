@@ -34,21 +34,27 @@ def test_clean_series_same_column_for_time_and_value_does_not_raise():
     assert dropped == 0
 
 
-def _sample_result():
+def _sample_result(ruleset=1):
     values = [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 20, 11]
-    return [str(i) for i in range(len(values))], analyze(values, ruleset=1)
+    return [str(i) for i in range(len(values))], analyze(values, ruleset=ruleset)
+
+
+def _line_traces(fig):
+    return [t for t in fig.data if t.mode == "lines"]
+
+
+def _marker_traces(fig):
+    return [t for t in fig.data if t.mode == "markers"]
 
 
 def test_xmr_figure_hovertemplates_carry_limit_values():
     labels, result = _sample_result()
     fig = app._xmr_figure(labels, result, {}, {})
 
-    x_tmpl = fig.data[0].hovertemplate
+    x_tmpl, mr_tmpl = (t.hovertemplate for t in _line_traces(fig))
     assert f"{result.unpl:.2f}" in x_tmpl
     assert f"{result.x_center:.2f}" in x_tmpl
     assert f"{result.lnpl:.2f}" in x_tmpl
-
-    mr_tmpl = fig.data[1].hovertemplate
     assert f"{result.mr_center:.2f}" in mr_tmpl
     assert f"{result.mr_upper:.2f}" in mr_tmpl
 
@@ -61,37 +67,56 @@ def test_xmr_figure_hlines_annotated_with_numeric_values_on_the_right():
     for value in (result.x_center, result.unpl, result.lnpl,
                   result.mr_center, result.mr_upper):
         assert f"{value:.2f}" in ann_texts
-    # the abbreviations are gone
     assert "UNPL" not in ann_texts
     assert "X̄" not in ann_texts
-    # numbers sit on the right
+    # numbers sit on the right (zone lines add no annotations)
     assert {a.xanchor for a in fig.layout.annotations} == {"right"}
 
 
-def test_xmr_figure_only_signal_points_are_highlighted():
+def test_xmr_figure_non_signal_points_have_no_dots():
     labels, result = _sample_result()
-    x_flags = {10: {1}}
-    fig = app._xmr_figure(labels, result, x_flags, {})
+    fig = app._xmr_figure(labels, result, {10: {1}}, {10: {1}})
 
-    marker_colors = list(fig.data[0].marker.color)
-    trend_color = fig.data[0].line.color
-    assert marker_colors[10] == app.RED
-    # every non-signal point blends into the trend line, no accent color
-    for i, c in enumerate(marker_colors):
-        if i != 10:
-            assert c == trend_color
+    # the data traces are pure lines, no markers
+    for t in _line_traces(fig):
+        assert t.mode == "lines"
+        assert t.marker.color is None
+
+    # signal dots are a separate red markers-only trace per chart
+    marker_traces = _marker_traces(fig)
+    assert len(marker_traces) == 2
+    for t in marker_traces:
+        assert t.marker.color == app.RED
+        assert list(t.x) == ["10"]
+        assert t.hoverinfo == "skip"
 
 
-def test_xmr_figure_line_contrast_ramp():
+def test_xmr_figure_trend_and_line_colors_are_a_fixed_gray_ramp():
     labels, result = _sample_result()
     fig = app._xmr_figure(labels, result, {}, {})
 
-    colors = app._line_colors()
-    # trend, centerline, limits are three distinct shades
-    assert len({colors["trend"], colors["center"], colors["limit"]}) == 3
+    for t in _line_traces(fig):
+        assert t.line.color == app.TREND_COLOR
     shape_colors = {s.line.color for s in fig.layout.shapes}
-    assert colors["center"] in shape_colors
-    assert colors["limit"] in shape_colors
+    assert app.CENTER_COLOR in shape_colors   # centerline
+    assert app.LIMIT_COLOR in shape_colors    # 3-sigma limits
+    assert app.ZONE_COLOR in shape_colors     # secondary zones
+    # opacity ramp: trend solid, centerline darker than limits, zones faintest
+    assert "0.7" in app.CENTER_COLOR
+    assert "0.4" in app.LIMIT_COLOR
+    assert "0.18" in app.ZONE_COLOR
+
+
+def test_xmr_figure_secondary_zone_line_count_matches_ruleset():
+    labels, r1 = _sample_result(ruleset=1)
+    labels, r2 = _sample_result(ruleset=2)
+    fig1 = app._xmr_figure(labels, r1, {}, {})
+    fig2 = app._xmr_figure(labels, r2, {}, {})
+
+    zone1 = [s for s in fig1.layout.shapes if s.line.color == app.ZONE_COLOR]
+    zone2 = [s for s in fig2.layout.shapes if s.line.color == app.ZONE_COLOR]
+    assert len(zone1) == 2   # +/- 1.5 sigma
+    assert len(zone2) == 4   # +/- 1 sigma and +/- 2 sigma
 
 
 def test_xmr_figure_x_axis_on_x_chart_only():

@@ -26,6 +26,10 @@ class XmRResult:
     mr_center: float
     mr_upper: float
     violations: list[tuple[int, int, str]]
+    # y-values of the secondary detection zones the active ruleset uses on the
+    # X chart (rule 3 -> +/-1.5 sigma; rules 4 & 5 -> +/-1 and +/-2 sigma).
+    # Sorted ascending; empty when the ruleset has no k-of-m rules.
+    x_zone_bounds: list[float]
 
 
 def _sigma_half_width(k_sigma: float, mr_center: float) -> float:
@@ -106,6 +110,7 @@ def analyze(values, ruleset: int = 1, baseline=None) -> XmRResult:
 
     rules = RULESETS[ruleset]
     violations: list[tuple[int, int, str]] = []
+    zone_halves: list[float] = []
 
     if 1 in rules:
         for i in rule_1(values, lnpl, unpl):
@@ -117,9 +122,15 @@ def analyze(values, ruleset: int = 1, baseline=None) -> XmRResult:
         if rule_num not in rules:
             continue
         half = _sigma_half_width(k_sigma, mr_center)
+        zone_halves.append(half)
         hits = rule_k_of_m(values, x_center + half, x_center - half, k, m)
         for i in hits:
             violations.append((i, rule_num, "x"))
+
+    x_zone_bounds = sorted(
+        [x_center - h for h in zone_halves]
+        + [x_center + h for h in zone_halves]
+    )
 
     for i in range(1, n):
         if moving_ranges[i] is not None and moving_ranges[i] > mr_upper:
@@ -136,4 +147,5 @@ def analyze(values, ruleset: int = 1, baseline=None) -> XmRResult:
         mr_center=mr_center,
         mr_upper=mr_upper,
         violations=violations,
+        x_zone_bounds=x_zone_bounds,
     )
