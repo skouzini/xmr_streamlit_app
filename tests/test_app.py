@@ -8,6 +8,20 @@ def test_app_exposes_main():
     assert callable(app.main)
 
 
+def test_data_tab_renders_a_preview_not_the_whole_table(monkeypatch):
+    shown = []
+    monkeypatch.setattr(app.st, "dataframe", lambda *a, **k: shown.append(a[0]))
+    captions = []
+    monkeypatch.setattr(app.st, "caption", lambda *a, **k: captions.append(a[0]))
+
+    df = pd.DataFrame({"t": range(200), "v": range(200)})
+    app._render_data_tab(df, "t", "v")
+
+    assert len(shown) == 1
+    assert len(shown[0]) == app.PREVIEW_ROWS
+    assert f"first {app.PREVIEW_ROWS} rows" in captions[0]
+
+
 def test_data_tab_renders_regardless_of_column_choice(monkeypatch):
     shown = []
     monkeypatch.setattr(app.st, "dataframe", lambda *a, **k: shown.append(a))
@@ -16,6 +30,16 @@ def test_data_tab_renders_regardless_of_column_choice(monkeypatch):
     df = pd.DataFrame({"v": [1, 2, 3, 4]})
     app._render_data_tab(df, "v", "v")  # same column picked — still shows
     assert len(shown) == 1
+
+
+def test_ruleset_help_summarizes_every_rule_in_each_ruleset():
+    from xmr import RULESETS
+
+    help_text = app._ruleset_help()
+    for rs, rules in RULESETS.items():
+        assert f"Ruleset {rs}" in help_text
+        for r in rules:
+            assert app.RULE_SUMMARIES[r] in help_text
 
 
 def test_charts_tab_draws_a_chart_only_when_the_data_is_usable(monkeypatch):

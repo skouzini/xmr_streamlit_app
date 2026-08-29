@@ -12,6 +12,16 @@ from plotly.subplots import make_subplots
 from xmr import MIN_POINTS, RULESETS, SOFT_LIMIT_MIN_MR, analyze
 
 RED = "#d62728"  # signal-point highlight
+PREVIEW_ROWS = 50  # rows shown in the Data tab preview
+
+# One-line summary of each detection rule, for the ruleset tooltip.
+RULE_SUMMARIES = {
+    1: "a single point outside the limits (3σ)",
+    2: "8 consecutive points on one side of the centerline",
+    3: "3 of 4 points beyond 1.5σ, same side",
+    4: "2 of 3 points beyond 2σ, same side",
+    5: "4 of 5 points beyond 1σ, same side",
+}
 
 # One neutral-gray palette that reads on both light and dark backgrounds.
 # Same hue throughout; opacity is the contrast ramp — trend line loudest,
@@ -206,8 +216,18 @@ def _sidebar_inputs():
             format_func=lambda r: (
                 f"Ruleset {r} — rules {', '.join(map(str, RULESETS[r]))}"
             ),
+            help=_ruleset_help(),
         )
     return df, time_col, value_col, ruleset
+
+
+def _ruleset_help():
+    """Markdown summary of each ruleset's detection rules, for the tooltip."""
+    blocks = []
+    for rs, rules in RULESETS.items():
+        items = "\n".join(f"- **{r}.** {RULE_SUMMARIES[r]}" for r in rules)
+        blocks.append(f"**Ruleset {rs}**\n{items}")
+    return "\n\n".join(blocks)
 
 
 def main():
@@ -244,8 +264,10 @@ def _render_data_tab(df, time_col, value_col):
     note = f"{len(df)} rows uploaded · {len(values)} usable in `{value_col}`"
     if dropped:
         note += f" · {dropped} skipped (missing or non-numeric)"
+    if len(df) > PREVIEW_ROWS:
+        note += f" · preview: first {PREVIEW_ROWS} rows"
     st.caption(note)
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df.head(PREVIEW_ROWS), use_container_width=True)
 
 
 def _render_charts_tab(df, time_col, value_col, ruleset):
