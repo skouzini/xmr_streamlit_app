@@ -8,6 +8,36 @@ def test_app_exposes_main():
     assert callable(app.main)
 
 
+def test_data_tab_renders_regardless_of_column_choice(monkeypatch):
+    shown = []
+    monkeypatch.setattr(app.st, "dataframe", lambda *a, **k: shown.append(a))
+    monkeypatch.setattr(app.st, "caption", lambda *a, **k: None)
+
+    df = pd.DataFrame({"v": [1, 2, 3, 4]})
+    app._render_data_tab(df, "v", "v")  # same column picked — still shows
+    assert len(shown) == 1
+
+
+def test_charts_tab_draws_a_chart_only_when_the_data_is_usable(monkeypatch):
+    drawn = []
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: drawn.append(a))
+    for name in ("error", "warning", "success", "subheader", "caption",
+                 "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    good = pd.DataFrame(
+        {"t": list(range(12)),
+         "v": [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 20, 11]}
+    )
+    app._render_charts_tab(good, "t", "v", 1)
+    assert len(drawn) == 1
+
+    drawn.clear()
+    app._render_charts_tab(good, "t", "t", 1)          # same column
+    app._render_charts_tab(pd.DataFrame({"a": ["x"], "b": ["y"]}), "a", "b", 1)
+    assert drawn == []  # error paths return without drawing
+
+
 def test_clean_series_drops_non_numeric_and_missing_preserving_order():
     df = pd.DataFrame(
         {"t": ["a", "b", "c", "d", "e"], "v": [1, "oops", 3, None, 5]}

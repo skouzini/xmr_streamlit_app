@@ -228,9 +228,33 @@ def main():
         st.stop()
     df, time_col, value_col, ruleset = inputs
 
+    charts_tab, data_tab = st.tabs(["📈 Charts", "🗂 Data"])
+
+    # The Data tab always renders — even when the column choice can't produce a
+    # chart yet, so you can look at the file and pick the right columns.
+    with data_tab:
+        _render_data_tab(df, time_col, value_col)
+
+    with charts_tab:
+        _render_charts_tab(df, time_col, value_col, ruleset)
+
+
+def _render_data_tab(df, time_col, value_col):
+    _, values, dropped = clean_series(df, time_col, value_col)
+    note = f"{len(df)} rows uploaded · {len(values)} usable in `{value_col}`"
+    if dropped:
+        note += f" · {dropped} skipped (missing or non-numeric)"
+    st.caption(note)
+    st.dataframe(df, use_container_width=True)
+
+
+def _render_charts_tab(df, time_col, value_col, ruleset):
     if time_col == value_col:
-        st.error("Pick two different columns for the time and value.")
-        st.stop()
+        st.error(
+            "Pick two different columns for the time and value "
+            "(check the **Data** tab)."
+        )
+        return
 
     labels, values, dropped = clean_series(df, time_col, value_col)
     if dropped:
@@ -241,15 +265,15 @@ def main():
     if len(values) < MIN_POINTS:
         st.error(
             f"XmR charts need at least {MIN_POINTS} data points; "
-            f"got {len(values)}."
+            f"got {len(values)} usable in `{value_col}` — check the **Data** tab."
         )
-        st.stop()
+        return
 
     try:
         result = analyze(values, ruleset=ruleset)
     except ValueError as exc:
         st.error(str(exc))
-        st.stop()
+        return
 
     mr_count = sum(1 for m in result.moving_ranges if m is not None)
     if mr_count < SOFT_LIMIT_MIN_MR:
@@ -269,29 +293,19 @@ def main():
     for idx, rule, chart in result.violations:
         (x_flags if chart == "x" else mr_flags)[idx].add(rule)
 
-    charts_tab, data_tab = st.tabs(["📈 Charts", "🗂 Data"])
-
-    with charts_tab:
-        st.plotly_chart(
-            _xmr_figure(labels, result, x_flags, mr_flags),
+    st.plotly_chart(
+        _xmr_figure(labels, result, x_flags, mr_flags),
+        use_container_width=True,
+    )
+    st.subheader("Signals")
+    if result.violations:
+        st.dataframe(
+            pd.DataFrame(_signals_table_rows(result, labels)),
             use_container_width=True,
         )
-        st.subheader("Signals")
-        if result.violations:
-            st.dataframe(
-                pd.DataFrame(_signals_table_rows(result, labels)),
-                use_container_width=True,
-            )
-        else:
-            st.success("No signals detected — the process looks predictable.")
-        st.caption(_summary_caption(result, len(values)))
-
-    with data_tab:
-        note = f"{len(df)} rows uploaded · {len(values)} used"
-        if dropped:
-            note += f" · {dropped} skipped (missing or non-numeric)"
-        st.caption(note)
-        st.dataframe(df, use_container_width=True)
+    else:
+        st.success("No signals detected — the process looks predictable.")
+    st.caption(_summary_caption(result, len(values)))
 
 
 if __name__ == "__main__":
