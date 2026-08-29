@@ -4,13 +4,31 @@ from __future__ import annotations
 
 import io
 from collections import defaultdict
+from typing import NamedTuple
 
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from xmr import MIN_POINTS, RULESETS, SOFT_LIMIT_MIN_MR, analyze
+from xmr import CENTER_METHODS, MIN_POINTS, RULESETS, SOFT_LIMIT_MIN_MR, analyze
+
+
+class Inputs(NamedTuple):
+    df: pd.DataFrame
+    time_col: str
+    value_col: str
+    ruleset: int
+    x_center: str   # "mean" | "median"
+    mr_center: str  # "mean" | "median"
+    is_sample: bool
+
+
+# Centerline symbol for hover text and the summary caption.
+_CENTER_SYMBOL = {
+    ("x", "mean"): "X̄", ("x", "median"): "X̃",
+    ("mr", "mean"): "mR̄", ("mr", "median"): "mR̃",
+}
 
 RED = "#d62728"  # signal-point highlight
 PREVIEW_ROWS = 50  # rows shown in the Data tab preview
@@ -151,10 +169,12 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
     )
 
+    x_sym = _CENTER_SYMBOL[("x", result.x_center_method)]
+    mr_sym = _CENTER_SYMBOL[("mr", result.mr_center_method)]
     x_hover = (
         "%{x}<br>Value: %{y}%{text}"
         f"<br>UNPL {result.unpl:.2f}"
-        f"<br>X̄ {result.x_center:.2f}"
+        f"<br>{x_sym} {result.x_center:.2f}"
         f"<br>LNPL {result.lnpl:.2f}"
         "<extra></extra>"
     )
@@ -171,7 +191,7 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
     mr_hover = (
         "%{x}<br>Moving range: %{y}%{text}"
         f"<br>URL {result.mr_upper:.2f}"
-        f"<br>mR̄ {result.mr_center:.2f}"
+        f"<br>{mr_sym} {result.mr_center:.2f}"
         "<extra></extra>"
     )
     _line_and_signals(fig, 2, labels, result.moving_ranges, mr_flags, mr_hover, n)
@@ -207,20 +227,21 @@ def _signals_table_rows(result, labels):
 def _summary_caption(result, n):
     x_pts = len({idx for idx, _, chart in result.violations if chart == "x"})
     mr_pts = len({idx for idx, _, chart in result.violations if chart == "mr"})
+    x_sym = _CENTER_SYMBOL[("x", result.x_center_method)]
+    mr_sym = _CENTER_SYMBOL[("mr", result.mr_center_method)]
     return (
-        f"n = {n}  |  X̄ = {result.x_center:.3f}  |  "
-        f"mR̄ = {result.mr_center:.3f}  |  UNPL = {result.unpl:.3f}  |  "
+        f"n = {n}  |  {x_sym} = {result.x_center:.3f}  |  "
+        f"{mr_sym} = {result.mr_center:.3f}  |  UNPL = {result.unpl:.3f}  |  "
         f"LNPL = {result.lnpl:.3f}  |  URL = {result.mr_upper:.3f}  |  "
         f"flagged points — X: {x_pts}, mR: {mr_pts}"
     )
 
 
 def _sidebar_inputs():
-    """Render the sidebar controls.
+    """Render the sidebar controls and return an ``Inputs``.
 
-    Returns ``(df, time_col, value_col, ruleset, is_sample)``. Until a file is
-    uploaded, ``df`` is the bundled sample and ``is_sample`` is True. Calls
-    ``st.stop()`` itself for an unreadable or malformed uploaded file.
+    Until a file is uploaded, ``df`` is the bundled sample and ``is_sample``
+    is True. Calls ``st.stop()`` itself for an unreadable or malformed file.
     """
     with st.sidebar:
         st.header("Data & options")
@@ -260,7 +281,25 @@ def _sidebar_inputs():
             ),
             help=_ruleset_help(),
         )
-    return df, time_col, value_col, ruleset, is_sample
+        x_center = st.radio(
+            "X chart centerline",
+            options=CENTER_METHODS,
+            format_func=str.capitalize,
+            horizontal=True,
+            help=(
+                "Mean is the conventional XmR centerline. Median is Wheeler's "
+                "outlier-robust variant — it also switches the limit scaling "
+                "factor for whichever chart uses a median moving range."
+            ),
+        )
+        mr_center = st.radio(
+            "mR chart centerline",
+            options=CENTER_METHODS,
+            format_func=str.capitalize,
+            horizontal=True,
+        )
+    return Inputs(df, time_col, value_col, ruleset, x_center, mr_center,
+                  is_sample)
 
 
 def _ruleset_help():
@@ -280,8 +319,8 @@ def main():
     )
     st.title("XmR Chart Analyzer")
 
-    df, time_col, value_col, ruleset, is_sample = _sidebar_inputs()
-    if is_sample:
+    inp = _sidebar_inputs()
+    if inp.is_sample:
         st.info(
             "📊 Showing bundled **sample data**. Upload a CSV or Excel file "
             "from the sidebar to analyze your own."
@@ -292,14 +331,15 @@ def main():
     # The Data tab always renders — even when the column choice can't produce a
     # chart yet, so you can look at the file and pick the right columns.
     with data_tab:
-        _render_data_tab(df, time_col, value_col)
+        _render_data_tab(inp)
 
     with charts_tab:
-        _render_charts_tab(df, time_col, value_col, ruleset)
+        _render_charts_tab(inp)
 
 
-def _render_data_tab(df, time_col, value_col):
-    _, values, dropped = clean_series(df, time_col, value_col)
+def _render_data_tab(inp):
+    df, value_col = inp.df, inp.value_col
+    _, values, dropped = clean_series(df, inp.time_col, value_col)
     note = f"{len(df)} rows uploaded · {len(values)} usable in `{value_col}`"
     if dropped:
         note += f" · {dropped} skipped (missing or non-numeric)"
@@ -309,7 +349,8 @@ def _render_data_tab(df, time_col, value_col):
     st.dataframe(df.head(PREVIEW_ROWS), use_container_width=True)
 
 
-def _render_charts_tab(df, time_col, value_col, ruleset):
+def _render_charts_tab(inp):
+    df, time_col, value_col = inp.df, inp.time_col, inp.value_col
     if time_col == value_col:
         st.error(
             "Pick two different columns for the time and value "
@@ -331,7 +372,12 @@ def _render_charts_tab(df, time_col, value_col, ruleset):
         return
 
     try:
-        result = analyze(values, ruleset=ruleset)
+        result = analyze(
+            values,
+            ruleset=inp.ruleset,
+            x_center=inp.x_center,
+            mr_center=inp.mr_center,
+        )
     except ValueError as exc:
         st.error(str(exc))
         return
@@ -345,8 +391,8 @@ def _render_charts_tab(df, time_col, value_col, ruleset):
         )
     if result.mr_center == 0:
         st.warning(
-            "Every value is identical: the moving-range average is zero and the "
-            "limits collapse onto the mean."
+            "Every value is identical: the moving-range centerline is zero and "
+            "the limits collapse onto the centerline."
         )
 
     x_flags = defaultdict(set)
