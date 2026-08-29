@@ -19,7 +19,7 @@ RED = "#d62728"  # signal-point highlight
 TREND_COLOR = "#808080"
 CENTER_COLOR = "rgba(128, 128, 128, 0.7)"
 LIMIT_COLOR = "rgba(128, 128, 128, 0.4)"
-ZONE_COLOR = "rgba(128, 128, 128, 0.18)"
+ZONE_COLOR = "rgba(128, 128, 128, 0.28)"
 GRID_COLOR = "rgba(128, 128, 128, 0.15)"
 
 

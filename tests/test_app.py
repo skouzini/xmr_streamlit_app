@@ -104,7 +104,7 @@ def test_xmr_figure_trend_and_line_colors_are_a_fixed_gray_ramp():
     # opacity ramp: trend solid, centerline darker than limits, zones faintest
     assert "0.7" in app.CENTER_COLOR
     assert "0.4" in app.LIMIT_COLOR
-    assert "0.18" in app.ZONE_COLOR
+    assert "0.28" in app.ZONE_COLOR
 
 
 def test_xmr_figure_secondary_zone_line_count_matches_ruleset():
