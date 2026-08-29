@@ -101,16 +101,20 @@ def _marker_traces(fig):
     return [t for t in fig.data if t.mode == "markers"]
 
 
-def test_xmr_figure_hovertemplates_carry_limit_values():
+def test_xmr_figure_hovertemplates_list_limits_one_per_line_high_to_low():
     labels, result = _sample_result()
     fig = app._xmr_figure(labels, result, {}, {})
-
     x_tmpl, mr_tmpl = (t.hovertemplate for t in _line_traces(fig))
-    assert f"{result.unpl:.2f}" in x_tmpl
-    assert f"{result.x_center:.2f}" in x_tmpl
-    assert f"{result.lnpl:.2f}" in x_tmpl
-    assert f"{result.mr_center:.2f}" in mr_tmpl
-    assert f"{result.mr_upper:.2f}" in mr_tmpl
+
+    assert f"<br>UNPL {result.unpl:.2f}" in x_tmpl
+    assert f"<br>X̄ {result.x_center:.2f}" in x_tmpl
+    assert f"<br>LNPL {result.lnpl:.2f}" in x_tmpl
+    # ordered highest value on top
+    assert x_tmpl.index("UNPL") < x_tmpl.index("X̄") < x_tmpl.index("LNPL")
+
+    assert f"<br>URL {result.mr_upper:.2f}" in mr_tmpl
+    assert f"<br>mR̄ {result.mr_center:.2f}" in mr_tmpl
+    assert mr_tmpl.index("URL") < mr_tmpl.index("mR̄")
 
 
 def test_xmr_figure_hlines_annotated_with_numeric_values_on_the_right():

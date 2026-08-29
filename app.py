@@ -119,8 +119,9 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
 
     x_hover = (
         "%{x}<br>Value: %{y}%{text}"
-        f"<br>UNPL {result.unpl:.2f} · X̄ {result.x_center:.2f}"
-        f" · LNPL {result.lnpl:.2f}"
+        f"<br>UNPL {result.unpl:.2f}"
+        f"<br>X̄ {result.x_center:.2f}"
+        f"<br>LNPL {result.lnpl:.2f}"
         "<extra></extra>"
     )
     _line_and_signals(fig, 1, labels, result.values, x_flags, x_hover, n)
@@ -135,7 +136,8 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
 
     mr_hover = (
         "%{x}<br>Moving range: %{y}%{text}"
-        f"<br>mR̄ {result.mr_center:.2f} · URL {result.mr_upper:.2f}"
+        f"<br>URL {result.mr_upper:.2f}"
+        f"<br>mR̄ {result.mr_center:.2f}"
         "<extra></extra>"
     )
     _line_and_signals(fig, 2, labels, result.moving_ranges, mr_flags, mr_hover, n)
