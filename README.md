@@ -28,9 +28,20 @@ The app opens on a bundled sample dataset. To analyze your own:
 ## What it computes
 
 - Individual values (X) chart and moving-range (mR) chart
-- Center lines: mean of the values, mean of the moving ranges
-- X-chart limits: `X-bar +/- 2.660 * mR-bar`
-- mR upper range limit: `3.268 * mR-bar` (no lower limit)
+- Center lines: mean (default) or median of the values, and mean or median
+  of the moving ranges — each chart's centerline is chosen independently
+- X-chart limits: `center +/- k * mR-center`
+- mR upper range limit: `k_url * mR-center` (no lower limit)
+
+The scaling factors depend on whether the mR centerline is the mean or the
+median moving range:
+
+| mR centerline | X-limit factor `k` | mR upper-limit factor `k_url` |
+|---------------|--------------------|-------------------------------|
+| mean          | 2.660              | 3.268                         |
+| median        | 3.145              | 3.865                         |
+
+(Median XmR is the outlier-robust variant; the factors are Wheeler's.)
 
 ## Detection rules
 
