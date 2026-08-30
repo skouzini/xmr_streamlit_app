@@ -58,6 +58,20 @@ median moving range:
 
 The mR chart uses rule 1 only.
 
+## Multiple series
+
+A file can hold several series (e.g. budget line items). Pick a **Data
+layout**:
+
+- **Single** — one value column (the default).
+- **Long** — one value column plus a column naming the series.
+- **Wide** — one column per series (multiselect).
+
+With Long or Wide you then choose a **View**: any single series' XmR chart,
+or **Combined** — all series merged per date with a chooseable function
+(**sum** for a budget total, mean, min, max, count). Time-granularity
+aggregation and the centerline choice apply to whichever series results.
+
 ## Time-granularity aggregation
 
 By default each row is one point ("Raw"). You can instead bucket the data by

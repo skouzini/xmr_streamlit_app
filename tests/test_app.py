@@ -1,15 +1,20 @@
 import pandas as pd
-import pytest
 
 import app
+from transform import COMBINED_VIEW, clean_series
 from xmr import analyze
 
 
 def _inputs(df, time_col="t", value_col="v", ruleset=1,
             x_center="mean", mr_center="mean", granularity="raw",
-            aggfunc="mean", is_sample=False):
+            aggfunc="mean", layout="single", series_col=None,
+            value_cols=None, view=COMBINED_VIEW, combine_func="sum",
+            is_sample=False):
+    if value_cols is None:
+        value_cols = (value_col,)
     return app.Inputs(df, time_col, value_col, ruleset, x_center, mr_center,
-                      granularity, aggfunc, is_sample)
+                      granularity, aggfunc, layout, series_col, value_cols,
+                      view, combine_func, is_sample)
 
 
 def test_app_exposes_main():
@@ -28,7 +33,7 @@ def test_sample_df_parses_and_charts_cleanly():
     assert list(df.columns) == ["week", "measurement"]
     assert len(df) == 24
 
-    labels, values, dropped = app.clean_series(df, "week", "measurement")
+    labels, values, dropped = clean_series(df, "week", "measurement")
     assert dropped == 0
     result = analyze(values, ruleset=1)
     assert result.violations  # the sample is built to trip at least one rule
@@ -56,61 +61,6 @@ def test_data_tab_renders_regardless_of_column_choice(monkeypatch):
     df = pd.DataFrame({"v": [1, 2, 3, 4]})
     app._render_data_tab(_inputs(df, "v", "v"))  # same column — still shows
     assert len(shown) == 1
-
-
-def test_aggregate_week_sum_labels_by_week_start():
-    df = pd.DataFrame(
-        {"d": ["2026-01-05", "2026-01-07", "2026-01-12", "2026-01-14",
-               "2026-01-19"],
-         "v": [1, 2, 3, 4, 5]}
-    )
-    labels, values, dropped = app.aggregate(df, "d", "v", "week", "sum")
-    assert dropped == 0
-    assert labels == ["2026-01-05", "2026-01-12", "2026-01-19"]
-    assert values == [3.0, 7.0, 5.0]
-
-
-def test_aggregate_month_quarter_year():
-    df = pd.DataFrame(
-        {"d": ["2026-01-10", "2026-01-20", "2026-02-15", "2026-04-01",
-               "2027-01-01"],
-         "v": [10, 20, 30, 40, 50]}
-    )
-    l, v, _ = app.aggregate(df, "d", "v", "month", "mean")
-    assert l == ["2026-01", "2026-02", "2026-04", "2027-01"]
-    assert v == [15.0, 30.0, 40.0, 50.0]
-
-    l, v, _ = app.aggregate(df, "d", "v", "quarter", "sum")
-    assert l == ["2026-Q1", "2026-Q2", "2027-Q1"]
-    assert v == [60.0, 40.0, 50.0]
-
-    l, v, _ = app.aggregate(df, "d", "v", "year", "sum")
-    assert l == ["2026", "2027"]
-    assert v == [100.0, 50.0]
-
-
-def test_aggregate_count_ignores_value_magnitude():
-    df = pd.DataFrame(
-        {"d": ["2026-01-05", "2026-01-06", "2026-01-12"], "v": [99, 1, 7]}
-    )
-    _, values, _ = app.aggregate(df, "d", "v", "week", "count")
-    assert values == [2.0, 1.0]
-
-
-def test_aggregate_drops_unparseable_date_and_value_rows():
-    df = pd.DataFrame(
-        {"d": ["2026-01-05", "not-a-date", "2026-01-12", "2026-01-19"],
-         "v": [1, 2, "x", 4]}
-    )
-    _, values, dropped = app.aggregate(df, "d", "v", "week", "sum")
-    assert dropped == 2
-    assert values == [1.0, 4.0]
-
-
-def test_aggregate_raises_when_column_is_not_dates():
-    df = pd.DataFrame({"d": ["a", "b", "c", "d"], "v": [1, 2, 3, 4]})
-    with pytest.raises(ValueError):
-        app.aggregate(df, "d", "v", "week", "sum")
 
 
 def test_charts_tab_falls_back_to_raw_when_time_is_not_dates(monkeypatch):
@@ -161,6 +111,61 @@ def test_charts_tab_draws_a_chart_only_when_the_data_is_usable(monkeypatch):
     assert drawn == []  # error paths return without drawing
 
 
+def _wide_budget():
+    # two 12-point series in wide layout
+    base = [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 10, 11]
+    return pd.DataFrame(
+        {"month": [f"2026-{m:02d}" for m in range(1, 13)],
+         "rent": [100] * 11 + [200],          # a spike in the last point
+         "food": base}
+    )
+
+
+def test_charts_tab_renders_one_chart_for_a_picked_wide_series(monkeypatch):
+    drawn = []
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: drawn.append(a))
+    captions = []
+    monkeypatch.setattr(app.st, "caption", lambda *a, **k: captions.append(a[0]))
+    for name in ("error", "warning", "success", "subheader", "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    inp = _inputs(_wide_budget(), "month", layout="wide",
+                  value_cols=("rent", "food"), view="rent")
+    app._render_charts_tab(inp)
+    assert len(drawn) == 1
+    assert any("Series: rent" in c for c in captions)
+
+
+def test_charts_tab_renders_combined_wide_series(monkeypatch):
+    drawn = []
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: drawn.append(a))
+    captions = []
+    monkeypatch.setattr(app.st, "caption", lambda *a, **k: captions.append(a[0]))
+    for name in ("error", "warning", "success", "subheader", "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    inp = _inputs(_wide_budget(), "month", layout="wide",
+                  value_cols=("rent", "food"), view=COMBINED_VIEW,
+                  combine_func="sum")
+    app._render_charts_tab(inp)
+    assert len(drawn) == 1
+    assert any("Combined — sum of 2 series" in c for c in captions)
+
+
+def test_charts_tab_errors_on_empty_wide_selection(monkeypatch):
+    drawn = []
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: drawn.append(a))
+    errors = []
+    monkeypatch.setattr(app.st, "error", lambda *a, **k: errors.append(a[0]))
+    for name in ("warning", "success", "subheader", "caption", "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    inp = _inputs(_wide_budget(), "month", layout="wide", value_cols=())
+    app._render_charts_tab(inp)
+    assert drawn == []
+    assert errors
+
+
 def test_summary_caption_and_hover_relabel_for_median():
     labels = [str(i) for i in range(12)]
     values = [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 20, 11]
@@ -176,32 +181,6 @@ def test_summary_caption_and_hover_relabel_for_median():
 
     r_mean = analyze(values, ruleset=1)
     assert "X̄ =" in app._summary_caption(r_mean, len(values))
-
-
-def test_clean_series_drops_non_numeric_and_missing_preserving_order():
-    df = pd.DataFrame(
-        {"t": ["a", "b", "c", "d", "e"], "v": [1, "oops", 3, None, 5]}
-    )
-    labels, values, dropped = app.clean_series(df, "t", "v")
-    assert values == [1.0, 3.0, 5.0]
-    assert labels == ["a", "c", "e"]
-    assert dropped == 2
-
-
-def test_clean_series_all_numeric():
-    df = pd.DataFrame({"t": [1, 2, 3], "v": [10.0, 11.0, 12.0]})
-    labels, values, dropped = app.clean_series(df, "t", "v")
-    assert values == [10.0, 11.0, 12.0]
-    assert labels == ["1", "2", "3"]
-    assert dropped == 0
-
-
-def test_clean_series_same_column_for_time_and_value_does_not_raise():
-    df = pd.DataFrame({"v": [1, 2, 3, 4]})
-    labels, values, dropped = app.clean_series(df, "v", "v")
-    assert values == [1.0, 2.0, 3.0, 4.0]
-    assert labels == ["1", "2", "3", "4"]
-    assert dropped == 0
 
 
 def _sample_result(ruleset=1):
