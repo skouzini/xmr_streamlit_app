@@ -7,11 +7,15 @@ that ``xmr.analyze`` expects.
 
 from __future__ import annotations
 
+import re
 import warnings
 
 import pandas as pd
 
+from xmr import MIN_POINTS
+
 GRANULARITIES = ("raw", "day", "week", "month", "quarter", "year")
+_QUARTER_LABEL = re.compile(r"^\s*(\d{4})-Q([1-4])\s*$")
 AGGFUNCS = ("sum", "mean", "median", "min", "max", "count", "first", "last")
 COMBINE_FUNCS = ("sum", "mean", "min", "max", "count")
 LAYOUTS = ("single", "long", "wide")
@@ -50,6 +54,45 @@ def date_filter(df, time_col, start=None, end=None):
     if end is not None:
         mask &= times <= pd.Timestamp(end)
     return df[mask.to_numpy()]
+
+
+def _label_timestamp(label):
+    """Parse one x-axis label to a Timestamp (``NaT`` if it doesn't parse).
+
+    Handles the ``YYYY-Qn`` labels ``aggregate`` emits (which ``parse_time``
+    can't) plus everything ``parse_time`` handles: ``YYYY``, ``YYYY-MM``,
+    ``YYYY-MM-DD`` and raw date passthroughs.
+    """
+    m = _QUARTER_LABEL.match(str(label))
+    if m:
+        year, quarter = int(m.group(1)), int(m.group(2))
+        return pd.Timestamp(year=year, month=(quarter - 1) * 3 + 1, day=1)
+    return parse_time(pd.Series([label])).iloc[0]
+
+
+def baseline_index_range(labels, start, end):
+    """Translate a date window to a half-open index range over ``labels``.
+
+    ``labels`` are the x-axis strings ``clean_series`` / ``aggregate`` produce.
+    ``start`` / ``end`` are ``date`` / ``Timestamp`` (inclusive). Returns
+    ``(i0, i1)`` spanning the labels that fall in the window. Raises
+    ``ValueError`` when fewer than ``MIN_POINTS`` labels land inside it.
+    """
+    lo = pd.Timestamp(start) if start is not None else None
+    hi = pd.Timestamp(end) if end is not None else None
+    inside = []
+    for i, label in enumerate(labels):
+        t = _label_timestamp(label)
+        if pd.isna(t):
+            continue
+        if (lo is None or t >= lo) and (hi is None or t <= hi):
+            inside.append(i)
+    if len(inside) < MIN_POINTS:
+        raise ValueError(
+            f"The baseline window covers {len(inside)} point(s); "
+            f"XmR needs at least {MIN_POINTS}."
+        )
+    return inside[0], inside[-1] + 1
 
 
 def clean_series(df, time_col, value_col):

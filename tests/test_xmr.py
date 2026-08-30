@@ -76,6 +76,24 @@ def test_baseline_too_short_raises():
         analyze(SERIES_A, baseline=(3, 4))
 
 
+@pytest.mark.parametrize("bad", [(-1, 5), (2, 2), (0, 999)])
+def test_baseline_out_of_bounds_raises(bad):
+    with pytest.raises(ValueError):
+        analyze(SERIES_A, baseline=bad)
+
+
+def test_baseline_limits_equal_the_window_and_flag_the_later_shift():
+    stable = [10, 11, 10, 11, 10, 11, 10, 11, 10, 11]
+    full = stable + [30, 31, 30]
+    r = analyze(full, baseline=(0, 10), ruleset=1)
+    ref = analyze(stable, ruleset=1)
+    assert r.x_center == pytest.approx(ref.x_center)
+    assert r.unpl == pytest.approx(ref.unpl)
+    assert r.lnpl == pytest.approx(ref.lnpl)
+    flagged = {i for i, rule, chart in r.violations if chart == "x" and rule == 1}
+    assert {10, 11, 12} <= flagged
+
+
 def test_x_zone_bounds_ruleset_1_is_the_one_and_a_half_sigma_pair():
     r = analyze(SERIES_A, ruleset=1)
     half = 1.5 / 3 * 2.660 * (15 / 7)

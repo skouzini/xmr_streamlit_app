@@ -116,6 +116,10 @@ def analyze(
         b_start, b_end = 0, n
     else:
         b_start, b_end = baseline
+        if not (0 <= b_start < b_end <= n):
+            raise ValueError(
+                f"baseline {baseline!r} is outside the data (0..{n})."
+            )
     if b_end - b_start < 2:
         raise ValueError("baseline must span at least 2 points.")
 

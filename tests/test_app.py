@@ -11,12 +11,15 @@ def _inputs(df, time_col="t", value_col="v", ruleset=1,
             x_center="mean", mr_center="mean", granularity="raw",
             aggfunc="mean", layout="single", series_col=None,
             value_cols=None, view=COMBINED_VIEW, combine_func="sum",
-            date_start=None, date_end=None, is_sample=False):
+            date_start=None, date_end=None,
+            baseline_on=False, baseline_start=None, baseline_end=None,
+            is_sample=False):
     if value_cols is None:
         value_cols = (value_col,)
     return app.Inputs(df, time_col, value_col, ruleset, x_center, mr_center,
                       granularity, aggfunc, layout, series_col, value_cols,
-                      view, combine_func, date_start, date_end, is_sample)
+                      view, combine_func, date_start, date_end,
+                      baseline_on, baseline_start, baseline_end, is_sample)
 
 
 def test_app_exposes_main():
@@ -143,6 +146,97 @@ def test_charts_tab_trims_to_the_selected_date_range(monkeypatch):
     assert xs[0] == "2026-01-05"
     assert xs[-1] == "2026-01-16"
     assert any("2026-01-05" in c and "2026-01-16" in c for c in captions)
+
+
+def test_inputs_round_trips_baseline_fields():
+    inp = _inputs(pd.DataFrame({"t": [1], "v": [1]}),
+                  baseline_on=True,
+                  baseline_start=datetime.date(2026, 1, 1),
+                  baseline_end=datetime.date(2026, 6, 1))
+    assert inp.baseline_on is True
+    assert inp.baseline_start == datetime.date(2026, 1, 1)
+    assert inp.baseline_end == datetime.date(2026, 6, 1)
+
+
+def test_xmr_figure_baseline_span_adds_one_rect_over_the_right_categories():
+    labels, result = _sample_result()
+    plain = app._xmr_figure(labels, result, {}, {})
+    assert [s for s in plain.layout.shapes if s.type == "rect"] == []
+
+    fig = app._xmr_figure(labels, result, {}, {}, baseline_span=(2, 6))
+    rects = [s for s in fig.layout.shapes if s.type == "rect"]
+    assert rects  # one band per subplot row
+    assert all(r.x0 == labels[2] and r.x1 == labels[5] for r in rects)
+
+
+def test_charts_tab_passes_the_baseline_index_range_to_analyze(monkeypatch):
+    seen = {}
+
+    def _spy(values, **kw):
+        seen["baseline"] = kw.get("baseline")
+        return analyze(values, **{k: v for k, v in kw.items()
+                                  if k != "baseline"})
+
+    monkeypatch.setattr(app, "analyze", _spy)
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: None)
+    for name in ("error", "warning", "success", "subheader", "caption",
+                 "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    df = pd.DataFrame(
+        {"t": [f"2026-{m:02d}" for m in range(1, 13)],
+         "v": [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 30, 31]}
+    )
+    inp = _inputs(df, "t", "v", baseline_on=True,
+                  baseline_start=datetime.date(2026, 1, 1),
+                  baseline_end=datetime.date(2026, 8, 31))
+    app._render_charts_tab(inp)
+
+    assert seen["baseline"] == (0, 8)
+
+
+def test_charts_tab_baseline_first_n_points_mode(monkeypatch):
+    seen = {}
+
+    def _spy(values, **kw):
+        seen["baseline"] = kw.get("baseline")
+        return analyze(values, **{k: v for k, v in kw.items()
+                                  if k != "baseline"})
+
+    monkeypatch.setattr(app, "analyze", _spy)
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: None)
+    for name in ("error", "warning", "success", "subheader", "caption",
+                 "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    df = pd.DataFrame(
+        {"t": list("abcdefghijkl"),
+         "v": [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 30, 31]}
+    )
+    app._render_charts_tab(
+        _inputs(df, "t", "v", baseline_on=True, baseline_start=6)
+    )
+    assert seen["baseline"] == (0, 6)
+
+
+def test_charts_tab_baseline_window_too_short_errors(monkeypatch):
+    errors = []
+    monkeypatch.setattr(app.st, "error", lambda *a, **k: errors.append(a[0]))
+    drawn = []
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: drawn.append(a))
+    for name in ("warning", "success", "subheader", "caption", "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    df = pd.DataFrame(
+        {"t": [f"2026-{m:02d}" for m in range(1, 13)],
+         "v": [10, 11, 10, 11, 10, 11, 10, 11, 10, 11, 30, 31]}
+    )
+    inp = _inputs(df, "t", "v", baseline_on=True,
+                  baseline_start=datetime.date(2026, 1, 1),
+                  baseline_end=datetime.date(2026, 2, 15))
+    app._render_charts_tab(inp)
+    assert drawn == []
+    assert errors
 
 
 def _wide_budget():

@@ -18,6 +18,7 @@ from transform import (
     GRANULARITIES,
     LAYOUTS,
     aggregate,
+    baseline_index_range,
     clean_series,
     collapse_series,
     date_filter,
@@ -44,6 +45,9 @@ class Inputs(NamedTuple):
     combine_func: str  # "sum" | "mean" | ... (used when view == COMBINED_VIEW)
     date_start: object  # datetime.date | None — inclusive lower bound
     date_end: object    # datetime.date | None — inclusive upper bound
+    baseline_on: bool
+    baseline_start: object  # datetime.date (date mode) | int (first-N mode)
+    baseline_end: object    # datetime.date | None (None in first-N mode)
     is_sample: bool
 
 
@@ -176,7 +180,7 @@ def _labeled_hline(fig, row, y, color, dash, position):
     )
 
 
-def _xmr_figure(labels, result, x_flags, mr_flags):
+def _xmr_figure(labels, result, x_flags, mr_flags, baseline_span=None):
     n = len(result.values)
     fig = make_subplots(
         rows=2, cols=1, shared_xaxes=True, vertical_spacing=0.15,
@@ -210,6 +214,16 @@ def _xmr_figure(labels, result, x_flags, mr_flags):
     _line_and_signals(fig, 2, labels, result.moving_ranges, mr_flags, mr_hover, n)
     _labeled_hline(fig, 2, result.mr_center, CENTER_COLOR, "solid", "top right")
     _labeled_hline(fig, 2, result.mr_upper, LIMIT_COLOR, "dash", "top right")
+
+    # faint band behind both charts marking the baseline window (if any)
+    if baseline_span is not None:
+        i0, i1 = baseline_span
+        fig.add_vrect(
+            x0=labels[i0], x1=labels[i1 - 1], row="all", col=1,
+            fillcolor=ZONE_COLOR, opacity=1, line_width=0, layer="below",
+            annotation_text="baseline", annotation_position="top left",
+            annotation_font_size=10,
+        )
 
     # XmR is a sequence chart: evenly spaced points, labels shown verbatim
     # (never re-interpreted as a date axis).
@@ -378,6 +392,37 @@ def _sidebar_inputs():
                 help="Sum for cumulative measures like a budget; "
                      "mean for readings.",
             )
+        baseline_on = st.checkbox("Use a baseline period", value=False)
+        baseline_start = baseline_end = None
+        if baseline_on:
+            parsed = parse_time(df[time_col])
+            time_is_dates = (
+                not pd.api.types.is_numeric_dtype(df[time_col])
+                and int(parsed.notna().sum()) >= 2
+            )
+            if time_is_dates:
+                lo, hi = parsed.min().date(), parsed.max().date()
+                default_to = lo + (hi - lo) / 3
+                baseline_start = st.date_input(
+                    "Baseline from", value=lo, min_value=lo, max_value=hi
+                )
+                baseline_end = st.date_input(
+                    "Baseline to", value=default_to,
+                    min_value=lo, max_value=hi,
+                )
+            else:
+                baseline_start = int(st.number_input(
+                    "Baseline = first N points",
+                    min_value=MIN_POINTS, value=MIN_POINTS, step=1,
+                    help="Compute the limits from the first N points, then "
+                         "plot every point against them.",
+                ))
+                baseline_end = None
+            st.caption(
+                "Limits come from the baseline window; later points are "
+                "plotted against them but never change them."
+            )
+
         ruleset = st.radio(
             "Detection ruleset",
             options=list(RULESETS),
@@ -405,7 +450,8 @@ def _sidebar_inputs():
         )
     return Inputs(df, time_col, value_col, ruleset, x_center, mr_center,
                   granularity, aggfunc, layout, series_col, value_cols, view,
-                  combine_func, date_start, date_end, is_sample)
+                  combine_func, date_start, date_end, baseline_on,
+                  baseline_start, baseline_end, is_sample)
 
 
 def _ruleset_help():
@@ -471,6 +517,23 @@ def _series_note(inp, long_df):
     return f"Series: {inp.view}"
 
 
+def _baseline_range(inp, labels, n):
+    """Half-open ``(i0, i1)`` index range for the baseline window.
+
+    ``baseline_start`` is an ``int`` in first-N-points mode (non-date time
+    column) or a ``date`` in date mode. Raises ``ValueError`` with a
+    user-facing message when the window is too short or off the data.
+    """
+    if type(inp.baseline_start) is int:
+        count = min(inp.baseline_start, n)
+        if count < MIN_POINTS:
+            raise ValueError(
+                f"The baseline needs at least {MIN_POINTS} points; got {count}"
+            )
+        return 0, count
+    return baseline_index_range(labels, inp.baseline_start, inp.baseline_end)
+
+
 def _render_charts_tab(inp):
     df = inp.df
     if inp.layout == "single" and inp.time_col == inp.value_col:
@@ -519,9 +582,6 @@ def _render_charts_tab(inp):
         st.warning(
             f"Skipped {dropped} row(s) with missing or non-numeric values."
         )
-    notes = [n for n in (date_note, series_note, agg_note) if n]
-    if notes:
-        st.caption("  ·  ".join(notes))
 
     if len(values) < MIN_POINTS:
         detail = f"got {len(values)}"
@@ -535,10 +595,27 @@ def _render_charts_tab(inp):
         )
         return
 
+    baseline, baseline_note = None, None
+    if inp.baseline_on:
+        try:
+            baseline = _baseline_range(inp, labels, len(values))
+        except ValueError as exc:
+            st.error(f"{exc} — check the **Data** tab.")
+            return
+        b0, b1 = baseline
+        baseline_note = (
+            f"Baseline: {labels[b0]} → {labels[b1 - 1]} ({b1 - b0} points)"
+        )
+
+    notes = [n for n in (date_note, series_note, agg_note, baseline_note) if n]
+    if notes:
+        st.caption("  ·  ".join(notes))
+
     try:
         result = analyze(
             values,
             ruleset=inp.ruleset,
+            baseline=baseline,
             x_center=inp.x_center,
             mr_center=inp.mr_center,
         )
@@ -565,7 +642,7 @@ def _render_charts_tab(inp):
         (x_flags if chart == "x" else mr_flags)[idx].add(rule)
 
     st.plotly_chart(
-        _xmr_figure(labels, result, x_flags, mr_flags),
+        _xmr_figure(labels, result, x_flags, mr_flags, baseline_span=baseline),
         use_container_width=True,
     )
     st.subheader("Signals")

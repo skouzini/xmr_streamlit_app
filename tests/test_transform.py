@@ -5,6 +5,7 @@ import transform
 from transform import (
     COMBINED_VIEW,
     aggregate,
+    baseline_index_range,
     clean_series,
     collapse_series,
     date_filter,
@@ -194,6 +195,65 @@ def test_aggregate_still_works_after_parse_time_refactor():
     _, values, dropped = aggregate(df, "d", "v", "week", "sum")
     assert dropped == 2
     assert values == [1.0, 4.0]
+
+
+# --- baseline_index_range ----------------------------------------------
+
+def test_baseline_index_range_daily_labels():
+    labels = [f"2026-01-{d:02d}" for d in range(1, 13)]  # 12 daily points
+    i0, i1 = baseline_index_range(
+        labels, pd.Timestamp("2026-01-03"), pd.Timestamp("2026-01-08")
+    )
+    assert (i0, i1) == (2, 8)
+
+
+def test_baseline_index_range_month_labels():
+    labels = [f"2026-{m:02d}" for m in range(1, 13)]
+    i0, i1 = baseline_index_range(
+        labels, pd.Timestamp("2026-01-01"), pd.Timestamp("2026-06-30")
+    )
+    assert (i0, i1) == (0, 6)
+
+
+def test_baseline_index_range_quarter_labels():
+    labels = ["2025-Q1", "2025-Q2", "2025-Q3", "2025-Q4",
+              "2026-Q1", "2026-Q2"]
+    i0, i1 = baseline_index_range(
+        labels, pd.Timestamp("2025-01-01"), pd.Timestamp("2025-12-31")
+    )
+    assert (i0, i1) == (0, 4)
+
+
+def test_baseline_index_range_year_labels():
+    labels = ["2020", "2021", "2022", "2023", "2024", "2025"]
+    i0, i1 = baseline_index_range(
+        labels, pd.Timestamp("2020-01-01"), pd.Timestamp("2023-01-01")
+    )
+    assert (i0, i1) == (0, 4)
+
+
+def test_baseline_index_range_window_mid_series():
+    labels = [f"2026-{m:02d}" for m in range(1, 13)]
+    i0, i1 = baseline_index_range(
+        labels, pd.Timestamp("2026-04-01"), pd.Timestamp("2026-09-30")
+    )
+    assert (i0, i1) == (3, 9)
+
+
+def test_baseline_index_range_too_few_points_raises():
+    labels = [f"2026-{m:02d}" for m in range(1, 13)]
+    with pytest.raises(ValueError):
+        baseline_index_range(
+            labels, pd.Timestamp("2026-01-01"), pd.Timestamp("2026-02-28")
+        )
+
+
+def test_baseline_index_range_window_outside_data_raises():
+    labels = [f"2026-{m:02d}" for m in range(1, 13)]
+    with pytest.raises(ValueError):
+        baseline_index_range(
+            labels, pd.Timestamp("2030-01-01"), pd.Timestamp("2030-12-31")
+        )
 
 
 # --- to_long -------------------------------------------------------------
