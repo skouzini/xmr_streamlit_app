@@ -21,6 +21,37 @@ _PERIOD_CODE = {"day": "D", "week": "W", "month": "M", "quarter": "Q",
                 "year": "Y"}
 
 
+def parse_time(series):
+    """``pd.to_datetime(series, errors="coerce")`` with the "could not infer
+    format" ``UserWarning`` suppressed.
+
+    Returns a ``datetime64`` Series, ``NaT`` where a value doesn't parse.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return pd.to_datetime(series, errors="coerce")
+
+
+def date_filter(df, time_col, start=None, end=None):
+    """Restrict ``df`` to rows whose parsed ``time_col`` falls within
+    ``[start, end]`` inclusive.
+
+    ``start`` / ``end`` are ``date`` / ``Timestamp`` or ``None`` (that bound
+    open). With both ``None`` the input frame is returned unchanged (rows
+    whose time doesn't parse are kept). Otherwise unparseable rows are
+    dropped. Row order is preserved; the input is not mutated.
+    """
+    if start is None and end is None:
+        return df
+    times = parse_time(df[time_col])
+    mask = times.notna()
+    if start is not None:
+        mask &= times >= pd.Timestamp(start)
+    if end is not None:
+        mask &= times <= pd.Timestamp(end)
+    return df[mask.to_numpy()]
+
+
 def clean_series(df, time_col, value_col):
     """Return (labels, values, dropped_count), keeping row order."""
     numeric = pd.to_numeric(df[value_col], errors="coerce")
@@ -51,11 +82,8 @@ def aggregate(df, time_col, value_col, granularity, aggfunc):
     dropped and counted. Raises ``ValueError`` when fewer than two rows have a
     usable date (the time column isn't dates).
     """
-    with warnings.catch_warnings():
-        # non-date strings coerce to NaT and are handled below; pandas' "could
-        # not infer format" notice is expected noise on that path.
-        warnings.simplefilter("ignore", UserWarning)
-        dates = pd.to_datetime(df[time_col], errors="coerce")
+    # non-date strings coerce to NaT and are handled below.
+    dates = parse_time(df[time_col])
     nums = pd.to_numeric(df[value_col], errors="coerce")
     mask = dates.notna() & nums.notna()
     dropped = int((~mask).sum())

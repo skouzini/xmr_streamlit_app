@@ -7,6 +7,8 @@ from transform import (
     aggregate,
     clean_series,
     collapse_series,
+    date_filter,
+    parse_time,
     series_names,
     to_long,
 )
@@ -95,6 +97,103 @@ def test_aggregate_raises_when_column_is_not_dates():
     df = pd.DataFrame({"d": ["a", "b", "c", "d"], "v": [1, 2, 3, 4]})
     with pytest.raises(ValueError):
         aggregate(df, "d", "v", "week", "sum")
+
+
+# --- parse_time ----------------------------------------------------------
+
+def test_parse_time_parses_iso_dates():
+    out = parse_time(pd.Series(["2026-01-05", "2026-02-09", "2026-03-16"]))
+    assert pd.api.types.is_datetime64_any_dtype(out)
+    assert out.iloc[1] == pd.Timestamp("2026-02-09")
+
+
+def test_parse_time_coerces_junk_to_nat():
+    out = parse_time(pd.Series(["2026-01-05", "not-a-date", ""]))
+    assert out.iloc[0] == pd.Timestamp("2026-01-05")
+    assert pd.isna(out.iloc[1])
+    assert pd.isna(out.iloc[2])
+
+
+def test_parse_time_emits_no_warning_on_mixed_input(recwarn):
+    parse_time(pd.Series(["2026-01-05", "whoops", "2026-01-19"]))
+    assert len(recwarn) == 0
+
+
+# --- date_filter --------------------------------------------------------
+
+def _dated(rows):
+    return pd.DataFrame(rows)
+
+
+def test_date_filter_both_none_returns_input_unchanged():
+    df = _dated({"d": ["2026-01-05", "2026-01-12"], "v": [1, 2]})
+    assert date_filter(df, "d", None, None) is df
+
+
+def test_date_filter_inclusive_bounds():
+    df = _dated(
+        {"d": ["2026-01-05", "2026-01-12", "2026-01-19", "2026-01-26"],
+         "v": [1, 2, 3, 4]}
+    )
+    out = date_filter(df, "d", pd.Timestamp("2026-01-12"),
+                      pd.Timestamp("2026-01-19"))
+    assert out["v"].tolist() == [2, 3]
+
+
+def test_date_filter_start_only():
+    df = _dated(
+        {"d": ["2026-01-05", "2026-01-12", "2026-01-19"], "v": [1, 2, 3]}
+    )
+    out = date_filter(df, "d", pd.Timestamp("2026-01-12"), None)
+    assert out["v"].tolist() == [2, 3]
+
+
+def test_date_filter_end_only():
+    df = _dated(
+        {"d": ["2026-01-05", "2026-01-12", "2026-01-19"], "v": [1, 2, 3]}
+    )
+    out = date_filter(df, "d", None, pd.Timestamp("2026-01-12"))
+    assert out["v"].tolist() == [1, 2]
+
+
+def test_date_filter_drops_unparseable_rows_when_filtering():
+    df = _dated(
+        {"d": ["2026-01-05", "nope", "2026-01-19"], "v": [1, 2, 3]}
+    )
+    out = date_filter(df, "d", pd.Timestamp("2026-01-01"), None)
+    assert out["v"].tolist() == [1, 3]
+
+
+def test_date_filter_preserves_order_and_does_not_mutate_input():
+    df = _dated(
+        {"d": ["2026-01-19", "2026-01-05", "2026-01-12"], "v": [3, 1, 2]}
+    )
+    before = df.copy()
+    out = date_filter(df, "d", pd.Timestamp("2026-01-05"),
+                      pd.Timestamp("2026-01-19"))
+    assert out["v"].tolist() == [3, 1, 2]
+    pd.testing.assert_frame_equal(df, before)
+
+
+def test_date_filter_applies_to_a_multi_series_long_frame():
+    df = _dated(
+        {"d": ["2026-01-05", "2026-01-05", "2026-01-12", "2026-01-12"],
+         "site": ["a", "b", "a", "b"],
+         "v": [1, 10, 2, 20]}
+    )
+    out = date_filter(df, "d", pd.Timestamp("2026-01-12"), None)
+    assert out["v"].tolist() == [2, 20]
+    assert out["site"].tolist() == ["a", "b"]
+
+
+def test_aggregate_still_works_after_parse_time_refactor():
+    df = pd.DataFrame(
+        {"d": ["2026-01-05", "not-a-date", "2026-01-12", "2026-01-19"],
+         "v": [1, 2, "x", 4]}
+    )
+    _, values, dropped = aggregate(df, "d", "v", "week", "sum")
+    assert dropped == 2
+    assert values == [1.0, 4.0]
 
 
 # --- to_long -------------------------------------------------------------
