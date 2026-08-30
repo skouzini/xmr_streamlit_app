@@ -1,3 +1,5 @@
+import datetime
+
 import pandas as pd
 
 import app
@@ -9,12 +11,12 @@ def _inputs(df, time_col="t", value_col="v", ruleset=1,
             x_center="mean", mr_center="mean", granularity="raw",
             aggfunc="mean", layout="single", series_col=None,
             value_cols=None, view=COMBINED_VIEW, combine_func="sum",
-            is_sample=False):
+            date_start=None, date_end=None, is_sample=False):
     if value_cols is None:
         value_cols = (value_col,)
     return app.Inputs(df, time_col, value_col, ruleset, x_center, mr_center,
                       granularity, aggfunc, layout, series_col, value_cols,
-                      view, combine_func, is_sample)
+                      view, combine_func, date_start, date_end, is_sample)
 
 
 def test_app_exposes_main():
@@ -109,6 +111,38 @@ def test_charts_tab_draws_a_chart_only_when_the_data_is_usable(monkeypatch):
     app._render_charts_tab(_inputs(pd.DataFrame({"a": ["x"], "b": ["y"]}),
                                    "a", "b"))
     assert drawn == []  # error paths return without drawing
+
+
+def test_inputs_round_trips_date_filter_fields():
+    inp = _inputs(pd.DataFrame({"t": [1], "v": [1]}),
+                  date_start=datetime.date(2026, 1, 5),
+                  date_end=datetime.date(2026, 3, 1))
+    assert inp.date_start == datetime.date(2026, 1, 5)
+    assert inp.date_end == datetime.date(2026, 3, 1)
+
+
+def test_charts_tab_trims_to_the_selected_date_range(monkeypatch):
+    drawn = []
+    monkeypatch.setattr(app.st, "plotly_chart", lambda *a, **k: drawn.append(a))
+    captions = []
+    monkeypatch.setattr(app.st, "caption", lambda *a, **k: captions.append(a[0]))
+    for name in ("error", "warning", "success", "subheader", "dataframe"):
+        monkeypatch.setattr(app.st, name, lambda *a, **k: None)
+
+    df = pd.DataFrame(
+        {"t": [f"2026-01-{d:02d}" for d in range(1, 21)],
+         "v": [10, 11] * 10}
+    )
+    inp = _inputs(df, "t", "v",
+                  date_start=datetime.date(2026, 1, 5),
+                  date_end=datetime.date(2026, 1, 16))
+    app._render_charts_tab(inp)
+
+    assert len(drawn) == 1
+    xs = list(drawn[0][0].data[0].x)
+    assert xs[0] == "2026-01-05"
+    assert xs[-1] == "2026-01-16"
+    assert any("2026-01-05" in c and "2026-01-16" in c for c in captions)
 
 
 def _wide_budget():

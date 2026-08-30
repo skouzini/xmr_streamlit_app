@@ -20,6 +20,8 @@ from transform import (
     aggregate,
     clean_series,
     collapse_series,
+    date_filter,
+    parse_time,
     series_names,
     to_long,
 )
@@ -40,6 +42,8 @@ class Inputs(NamedTuple):
     value_cols: tuple[str, ...]
     view: str          # COMBINED_VIEW or a series name
     combine_func: str  # "sum" | "mean" | ... (used when view == COMBINED_VIEW)
+    date_start: object  # datetime.date | None — inclusive lower bound
+    date_end: object    # datetime.date | None — inclusive upper bound
     is_sample: bool
 
 
@@ -283,6 +287,25 @@ def _sidebar_inputs():
         columns = list(df.columns)
         time_col = st.selectbox("Time / label column", columns, index=0)
 
+        date_start = date_end = None
+        if st.checkbox("Filter by date range", value=False):
+            # A numeric column coerces to 1970-epoch timestamps rather than
+            # real dates — treat that as "not dates".
+            parsed = parse_time(df[time_col])
+            if (not pd.api.types.is_numeric_dtype(df[time_col])
+                    and int(parsed.notna().sum()) >= 2):
+                lo, hi = parsed.min().date(), parsed.max().date()
+                date_start = st.date_input(
+                    "From", value=lo, min_value=lo, max_value=hi
+                )
+                date_end = st.date_input(
+                    "To", value=hi, min_value=lo, max_value=hi
+                )
+            else:
+                st.caption(
+                    "Time column isn't dates — date filter unavailable."
+                )
+
         layout = st.radio(
             "Data layout",
             options=LAYOUTS,
@@ -382,7 +405,7 @@ def _sidebar_inputs():
         )
     return Inputs(df, time_col, value_col, ruleset, x_center, mr_center,
                   granularity, aggfunc, layout, series_col, value_cols, view,
-                  combine_func, is_sample)
+                  combine_func, date_start, date_end, is_sample)
 
 
 def _ruleset_help():
@@ -423,6 +446,9 @@ def main():
 def _render_data_tab(inp):
     df = inp.df
     note = f"{len(df)} rows uploaded"
+    if inp.date_start is not None or inp.date_end is not None:
+        kept = len(date_filter(df, inp.time_col, inp.date_start, inp.date_end))
+        note += f" · filtered to {kept} rows"
     try:
         long_df = to_long(df, inp.time_col, inp.value_cols, inp.series_col,
                           inp.layout)
@@ -453,6 +479,13 @@ def _render_charts_tab(inp):
             "(check the **Data** tab)."
         )
         return
+
+    date_note = None
+    if inp.date_start is not None or inp.date_end is not None:
+        df = date_filter(df, inp.time_col, inp.date_start, inp.date_end)
+        lo = inp.date_start.isoformat() if inp.date_start else "…"
+        hi = inp.date_end.isoformat() if inp.date_end else "…"
+        date_note = f"Dates: {lo} → {hi}"
 
     try:
         long_df = to_long(df, inp.time_col, inp.value_cols, inp.series_col,
@@ -486,7 +519,7 @@ def _render_charts_tab(inp):
         st.warning(
             f"Skipped {dropped} row(s) with missing or non-numeric values."
         )
-    notes = [n for n in (series_note, agg_note) if n]
+    notes = [n for n in (date_note, series_note, agg_note) if n]
     if notes:
         st.caption("  ·  ".join(notes))
 
@@ -494,6 +527,8 @@ def _render_charts_tab(inp):
         detail = f"got {len(values)}"
         if inp.granularity != "raw":
             detail += f" after aggregating by {inp.granularity}"
+        if date_note:
+            detail += " within the selected dates"
         st.error(
             f"XmR charts need at least {MIN_POINTS} data points; "
             f"{detail} — check the **Data** tab."
