@@ -58,6 +58,14 @@ median moving range:
 
 The mR chart uses rule 1 only.
 
+## Time-granularity aggregation
+
+By default each row is one point ("Raw"). You can instead bucket the data by
+**day / week / month / quarter / year** and pick an aggregation — **sum**
+(e.g. a budget), **mean** (readings), median, min, max, count, first, or last.
+Aggregation needs the time column to parse as dates; if it doesn't, the app
+falls back to the raw series with a warning.
+
 ## Limits on small samples
 
 - Fewer than 4 data points: no chart.
