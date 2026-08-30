@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import io
-import warnings
 from collections import defaultdict
 from typing import NamedTuple
 
@@ -12,6 +11,18 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from transform import (
+    AGGFUNCS,
+    COMBINE_FUNCS,
+    COMBINED_VIEW,
+    GRANULARITIES,
+    LAYOUTS,
+    aggregate,
+    clean_series,
+    collapse_series,
+    series_names,
+    to_long,
+)
 from xmr import CENTER_METHODS, MIN_POINTS, RULESETS, SOFT_LIMIT_MIN_MR, analyze
 
 
@@ -20,17 +31,16 @@ class Inputs(NamedTuple):
     time_col: str
     value_col: str
     ruleset: int
-    x_center: str     # "mean" | "median"
-    mr_center: str    # "mean" | "median"
-    granularity: str  # "raw" | "day" | "week" | "month" | "quarter" | "year"
-    aggfunc: str      # "sum" | "mean" | ... (ignored when granularity == "raw")
+    x_center: str      # "mean" | "median"
+    mr_center: str     # "mean" | "median"
+    granularity: str   # "raw" | "day" | "week" | "month" | "quarter" | "year"
+    aggfunc: str       # "sum" | "mean" | ... (ignored when granularity == "raw")
+    layout: str        # "single" | "long" | "wide"
+    series_col: str | None
+    value_cols: tuple[str, ...]
+    view: str          # COMBINED_VIEW or a series name
+    combine_func: str  # "sum" | "mean" | ... (used when view == COMBINED_VIEW)
     is_sample: bool
-
-
-_GRANULARITIES = ("raw", "day", "week", "month", "quarter", "year")
-_PERIOD_CODE = {"day": "D", "week": "W", "month": "M", "quarter": "Q",
-                "year": "Y"}
-_AGGFUNCS = ("sum", "mean", "median", "min", "max", "count", "first", "last")
 
 
 # Centerline symbol for hover text and the summary caption.
@@ -92,57 +102,6 @@ CENTER_COLOR = "rgba(128, 128, 128, 0.7)"
 LIMIT_COLOR = "rgba(128, 128, 128, 0.4)"
 ZONE_COLOR = "rgba(128, 128, 128, 0.28)"
 GRID_COLOR = "rgba(128, 128, 128, 0.15)"
-
-
-def clean_series(df, time_col, value_col):
-    """Return (labels, values, dropped_count), keeping row order."""
-    numeric = pd.to_numeric(df[value_col], errors="coerce")
-    mask = numeric.notna()
-    labels = df.loc[mask, time_col].astype(str).tolist()
-    values = [float(v) for v in numeric[mask].tolist()]
-    dropped = int((~mask).sum())
-    return labels, values, dropped
-
-
-def _period_label(period, granularity):
-    if granularity == "quarter":
-        return f"{period.year}-Q{period.quarter}"
-    if granularity == "year":
-        return str(period.year)
-    if granularity == "month":
-        return period.strftime("%Y-%m")
-    if granularity == "week":
-        return period.start_time.strftime("%Y-%m-%d")
-    return period.strftime("%Y-%m-%d")
-
-
-def aggregate(df, time_col, value_col, granularity, aggfunc):
-    """Resample df to a calendar granularity.
-
-    Returns ``(labels, values, dropped)`` — the same shape as ``clean_series``.
-    Rows whose time doesn't parse as a date, or whose value isn't numeric, are
-    dropped and counted. Raises ``ValueError`` when fewer than two rows have a
-    usable date (the time column isn't dates).
-    """
-    with warnings.catch_warnings():
-        # non-date strings coerce to NaT and are handled below; pandas' "could
-        # not infer format" notice is expected noise on that path.
-        warnings.simplefilter("ignore", UserWarning)
-        dates = pd.to_datetime(df[time_col], errors="coerce")
-    nums = pd.to_numeric(df[value_col], errors="coerce")
-    mask = dates.notna() & nums.notna()
-    dropped = int((~mask).sum())
-    if int(mask.sum()) < 2:
-        raise ValueError(f"Time column {time_col!r} doesn't look like dates.")
-
-    sub = pd.DataFrame(
-        {"period": dates[mask].dt.to_period(_PERIOD_CODE[granularity]),
-         "value": nums[mask].to_numpy()}
-    )
-    grouped = sub.groupby("period", sort=True)["value"].agg(aggfunc)
-    labels = [_period_label(p, granularity) for p in grouped.index]
-    values = [float(v) for v in grouped.to_numpy()]
-    return labels, values, dropped
 
 
 def _read_upload(uploaded):
@@ -323,12 +282,64 @@ def _sidebar_inputs():
 
         columns = list(df.columns)
         time_col = st.selectbox("Time / label column", columns, index=0)
-        value_col = st.selectbox(
-            "Value column", columns, index=1 if len(columns) > 1 else 0
+
+        layout = st.radio(
+            "Data layout",
+            options=LAYOUTS,
+            format_func={
+                "single": "Single series",
+                "long": "Long (category column)",
+                "wide": "Wide (multiple value columns)",
+            }.get,
+            help=(
+                "**Single** — one value column. **Long** — one value column "
+                "plus a column naming the series. **Wide** — one column per "
+                "series."
+            ),
         )
+
+        series_col = None
+        if layout == "wide":
+            non_time = [c for c in columns if c != time_col]
+            value_cols = tuple(
+                st.multiselect(
+                    "Value columns (series)", non_time, default=non_time[:1]
+                )
+            )
+            value_col = value_cols[0] if value_cols else time_col
+        else:
+            value_col = st.selectbox(
+                "Value column", columns, index=1 if len(columns) > 1 else 0
+            )
+            value_cols = (value_col,)
+            if layout == "long":
+                others = [c for c in columns if c not in (time_col, value_col)]
+                if others:
+                    series_col = st.selectbox("Series column", others)
+                else:
+                    st.caption("No spare column to use as the series.")
+
+        view, combine_func = COMBINED_VIEW, "sum"
+        if layout in ("long", "wide"):
+            names = []
+            try:
+                names = series_names(
+                    to_long(df, time_col, value_cols, series_col, layout)
+                )
+            except ValueError:
+                pass
+            view = st.selectbox("View", [COMBINED_VIEW, *names])
+            if view == COMBINED_VIEW:
+                combine_func = st.selectbox(
+                    "Combine series by",
+                    options=COMBINE_FUNCS,
+                    format_func=str.capitalize,
+                    help="Sum for a budget total; mean across sensors.",
+                )
+
         granularity = st.selectbox(
             "Aggregate by",
-            options=_GRANULARITIES,
+            options=GRANULARITIES,
             format_func=lambda g: (
                 "Raw (no aggregation)" if g == "raw" else g.capitalize()
             ),
@@ -338,8 +349,8 @@ def _sidebar_inputs():
         if granularity != "raw":
             aggfunc = st.selectbox(
                 "Aggregation",
-                options=_AGGFUNCS,
-                index=_AGGFUNCS.index("mean"),
+                options=AGGFUNCS,
+                index=AGGFUNCS.index("mean"),
                 format_func=str.capitalize,
                 help="Sum for cumulative measures like a budget; "
                      "mean for readings.",
@@ -370,7 +381,8 @@ def _sidebar_inputs():
             horizontal=True,
         )
     return Inputs(df, time_col, value_col, ruleset, x_center, mr_center,
-                  granularity, aggfunc, is_sample)
+                  granularity, aggfunc, layout, series_col, value_cols, view,
+                  combine_func, is_sample)
 
 
 def _ruleset_help():
@@ -409,48 +421,74 @@ def main():
 
 
 def _render_data_tab(inp):
-    df, value_col = inp.df, inp.value_col
-    _, values, dropped = clean_series(df, inp.time_col, value_col)
-    note = f"{len(df)} rows uploaded · {len(values)} usable in `{value_col}`"
-    if dropped:
-        note += f" · {dropped} skipped (missing or non-numeric)"
+    df = inp.df
+    note = f"{len(df)} rows uploaded"
+    try:
+        long_df = to_long(df, inp.time_col, inp.value_cols, inp.series_col,
+                          inp.layout)
+        if inp.layout != "single":
+            note += f" · {len(series_names(long_df))} series"
+    except ValueError:
+        pass
     if len(df) > PREVIEW_ROWS:
         note += f" · preview: first {PREVIEW_ROWS} rows"
     st.caption(note)
     st.dataframe(df.head(PREVIEW_ROWS), use_container_width=True)
 
 
+def _series_note(inp, long_df):
+    if inp.layout == "single":
+        return None
+    if inp.view == COMBINED_VIEW:
+        n = len(series_names(long_df))
+        return f"Combined — {inp.combine_func} of {n} series"
+    return f"Series: {inp.view}"
+
+
 def _render_charts_tab(inp):
-    df, time_col, value_col = inp.df, inp.time_col, inp.value_col
-    if time_col == value_col:
+    df = inp.df
+    if inp.layout == "single" and inp.time_col == inp.value_col:
         st.error(
             "Pick two different columns for the time and value "
             "(check the **Data** tab)."
         )
         return
 
+    try:
+        long_df = to_long(df, inp.time_col, inp.value_cols, inp.series_col,
+                          inp.layout)
+        if inp.layout == "single":
+            series_df = long_df[["time", "value"]]
+        else:
+            series_df = collapse_series(long_df, inp.view, inp.combine_func)
+    except ValueError as exc:
+        st.error(f"{exc} — check the **Data** tab.")
+        return
+
+    series_note = _series_note(inp, long_df)
+
     agg_note = None
     if inp.granularity == "raw":
-        labels, values, dropped = clean_series(df, time_col, value_col)
+        labels, values, dropped = clean_series(series_df, "time", "value")
     else:
         try:
             labels, values, dropped = aggregate(
-                df, time_col, value_col, inp.granularity, inp.aggfunc
+                series_df, "time", "value", inp.granularity, inp.aggfunc
             )
             agg_note = (
-                f"{len(df)} rows → {len(values)} {inp.granularity} "
-                f"point(s) ({inp.aggfunc})"
+                f"{len(values)} {inp.granularity} point(s) ({inp.aggfunc})"
             )
         except ValueError as exc:
             st.warning(f"{exc} Showing the raw data instead.")
-            labels, values, dropped = clean_series(df, time_col, value_col)
+            labels, values, dropped = clean_series(series_df, "time", "value")
 
     if dropped:
         st.warning(
             f"Skipped {dropped} row(s) with missing or non-numeric values."
         )
-    if agg_note:
-        st.caption(agg_note)
+    notes = [n for n in (series_note, agg_note) if n]
+    if notes:
+        st.caption("  ·  ".join(notes))
 
     if len(values) < MIN_POINTS:
         detail = f"got {len(values)}"
